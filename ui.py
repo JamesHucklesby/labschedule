@@ -1,0 +1,5611 @@
+import json
+from html import escape as html_escape
+from urllib.parse import quote as url_quote
+
+from fastapi import HTTPException, Request
+from nicegui import ui
+from sqlalchemy import select
+
+from auth import _session_user_for_login_or_api_token
+from database import _db_session
+from models import CalendarORM
+from utils import _sanitize_id_input
+
+
+def _calendar_info_blurb(calendar: CalendarORM) -> str:
+    blurb = str(getattr(calendar, 'blurb', '') or '').strip()
+    if blurb:
+        return blurb
+    group_name = calendar.group_name or 'General'
+    return f'{calendar.name} belongs to the {group_name} group and is available from the main schedule.'
+
+
+def _calendar_info_image_src(calendar: CalendarORM) -> str:
+    image_url = str(getattr(calendar, 'image_url', '') or '').strip()
+    if image_url:
+        return image_url
+
+    accent = calendar.color or '#2563eb'
+    title = html_escape(calendar.name)
+    group_name = html_escape(calendar.group_name or 'General')
+    svg = f'''
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+        <title id="title">{title}</title>
+        <desc id="desc">{group_name} calendar illustration</desc>
+        <defs>
+          <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#062f2d"/>
+            <stop offset="100%" stop-color="{accent}"/>
+          </linearGradient>
+          <radialGradient id="glow" cx="30%" cy="20%" r="80%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.24"/>
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <rect width="1200" height="720" rx="48" fill="url(#bg)"/>
+        <rect x="64" y="64" width="1072" height="592" rx="36" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.2"/>
+        <circle cx="180" cy="136" r="140" fill="url(#glow)"/>
+        <rect x="116" y="148" width="272" height="272" rx="36" fill="#ffffff" fill-opacity="0.16"/>
+        <rect x="160" y="192" width="184" height="22" rx="11" fill="#ffffff" fill-opacity="0.92"/>
+        <rect x="160" y="238" width="144" height="22" rx="11" fill="#ffffff" fill-opacity="0.78"/>
+        <rect x="160" y="284" width="212" height="22" rx="11" fill="#ffffff" fill-opacity="0.78"/>
+        <rect x="160" y="330" width="120" height="22" rx="11" fill="#ffffff" fill-opacity="0.78"/>
+        <text x="460" y="244" fill="#ffffff" font-family="Plus Jakarta Sans, Arial, sans-serif" font-size="72" font-weight="800">{title}</text>
+        <text x="460" y="316" fill="#d1fae5" font-family="IBM Plex Sans, Arial, sans-serif" font-size="34" font-weight="600">{group_name}</text>
+        <text x="460" y="388" fill="#ecfeff" font-family="IBM Plex Sans, Arial, sans-serif" font-size="26" font-weight="400">Calendar overview</text>
+      </svg>
+    '''.strip()
+    return 'data:image/svg+xml;utf8,' + url_quote(svg)
+
+
+@ui.page('/calendar-info/{calendar_id}')
+def calendar_info_page(calendar_id: str) -> None:
+    calendar_id = _sanitize_id_input(calendar_id, 'calendar_id')
+    with _db_session() as session:
+        calendar = session.get(CalendarORM, calendar_id)
+
+    page_title = 'Calendar information'
+    if calendar is not None:
+      page_title = f'{calendar.name} - Calendar information'
+
+    ui.add_head_html(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
+    )
+    ui.add_head_html(f'<title>{html_escape(page_title)}</title>')
+    ui.add_head_html('''
+        <style>
+          html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            background:
+              radial-gradient(circle at top left, rgba(16, 185, 129, 0.18), transparent 38%),
+              radial-gradient(circle at top right, rgba(14, 116, 144, 0.18), transparent 32%),
+              linear-gradient(145deg, #042f2e 0%, #082f2b 45%, #062f2d 100%);
+            color: #e2e8f0;
+            font-family: 'IBM Plex Sans', sans-serif;
+          }
+          h1, h2, h3 {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+          }
+          .calendar-info-page {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 28px;
+          }
+          .calendar-info-card {
+            width: min(1080px, 100%);
+            background: rgba(7, 26, 30, 0.82);
+            border: 1px solid rgba(167, 243, 208, 0.18);
+            box-shadow: 0 28px 70px rgba(2, 8, 16, 0.38);
+            border-radius: 28px;
+            overflow: hidden;
+            backdrop-filter: blur(14px);
+          }
+          .calendar-info-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            padding: 20px 22px 0;
+          }
+          .calendar-info-back {
+            color: #a7f3d0;
+            text-decoration: none;
+            font-weight: 700;
+          }
+          .calendar-info-back:hover { text-decoration: underline; }
+          .calendar-info-body {
+            display: grid;
+            grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.15fr);
+            gap: 24px;
+            padding: 22px;
+            align-items: center;
+          }
+          .calendar-info-image {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            object-fit: cover;
+            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.05);
+          }
+          .calendar-info-copy {
+            display: grid;
+            gap: 12px;
+          }
+          .calendar-info-kicker {
+            display: inline-flex;
+            width: fit-content;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(16, 185, 129, 0.14);
+            color: #bbf7d0;
+            border: 1px solid rgba(167, 243, 208, 0.24);
+            font-size: 0.78rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+          }
+          .calendar-info-copy h1 {
+            margin: 0;
+            color: #f8fafc;
+            font-size: clamp(2rem, 4vw, 3.8rem);
+            line-height: 1.02;
+          }
+          .calendar-info-copy p {
+            margin: 0;
+            color: #dbeafe;
+            font-size: 1rem;
+            line-height: 1.7;
+            max-width: 60ch;
+          }
+          .calendar-info-fallback {
+            padding: 22px;
+            color: #dbeafe;
+          }
+          .calendar-info-fallback h1 {
+            margin: 8px 0 12px;
+            color: #f8fafc;
+          }
+          @media (max-width: 860px) {
+            .calendar-info-body {
+              grid-template-columns: 1fr;
+            }
+            .calendar-info-top {
+              padding: 18px 18px 0;
+            }
+          }
+        </style>
+    ''')
+
+    if calendar is None:
+        ui.add_body_html('''
+          <main class="calendar-info-page">
+            <section class="calendar-info-card calendar-info-fallback">
+              <a class="calendar-info-back" href="/">Back to schedule</a>
+              <h1>Calendar not found</h1>
+              <p>The requested calendar could not be located.</p>
+            </section>
+          </main>
+        ''')
+        return
+
+    image_src = _calendar_info_image_src(calendar)
+    calendar_name = html_escape(calendar.name)
+    calendar_group = html_escape(calendar.group_name or 'General')
+    calendar_blurb = html_escape(_calendar_info_blurb(calendar))
+    calendar_image_src = html_escape(image_src, quote=True)
+
+    ui.add_body_html(f'''
+      <main class="calendar-info-page">
+        <section class="calendar-info-card">
+          <div class="calendar-info-top">
+            <a class="calendar-info-back" href="/">Back to schedule</a>
+          </div>
+          <div class="calendar-info-body">
+            <img class="calendar-info-image" src="{calendar_image_src}" alt="{calendar_name} calendar image" />
+            <div class="calendar-info-copy">
+              <div class="calendar-info-kicker">{calendar_group}</div>
+              <h1>{calendar_name}</h1>
+              <p>{calendar_blurb}</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    ''')
+
+
+@ui.page('/calendar-edit/{calendar_id}')
+def calendar_editor_page(calendar_id: str, request: Request) -> None:
+    session_token = request.cookies.get('session_token') or request.query_params.get('token')
+    current_user = _session_user_for_login_or_api_token(session_token)
+    calendar_id = _sanitize_id_input(calendar_id, 'calendar_id')
+
+    ui.add_head_html(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
+    )
+    ui.add_head_html('''
+        <style>
+          html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            background:
+              radial-gradient(circle at top left, rgba(16, 185, 129, 0.18), transparent 38%),
+              radial-gradient(circle at top right, rgba(14, 116, 144, 0.18), transparent 32%),
+              linear-gradient(145deg, #042f2e 0%, #082f2b 45%, #062f2d 100%);
+            color: #e2e8f0;
+            font-family: 'IBM Plex Sans', sans-serif;
+          }
+          h1, h2, h3 {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+          }
+          .calendar-edit-page {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 28px;
+          }
+          .calendar-edit-card {
+            width: min(1160px, 100%);
+            background: rgba(7, 26, 30, 0.82);
+            border: 1px solid rgba(167, 243, 208, 0.18);
+            box-shadow: 0 28px 70px rgba(2, 8, 16, 0.38);
+            border-radius: 28px;
+            overflow: hidden;
+            backdrop-filter: blur(14px);
+          }
+          .calendar-edit-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            padding: 20px 22px 0;
+          }
+          .calendar-edit-back {
+            color: #a7f3d0;
+            text-decoration: none;
+            font-weight: 700;
+          }
+          .calendar-edit-back:hover { text-decoration: underline; }
+          .calendar-edit-body {
+            display: grid;
+            grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.08fr);
+            gap: 24px;
+            padding: 22px;
+            align-items: start;
+          }
+          .calendar-edit-image {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            object-fit: cover;
+            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.05);
+          }
+          .calendar-edit-copy {
+            display: grid;
+            gap: 12px;
+          }
+          .calendar-edit-kicker {
+            display: inline-flex;
+            width: fit-content;
+            align-items: center;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(16, 185, 129, 0.14);
+            color: #bbf7d0;
+            border: 1px solid rgba(167, 243, 208, 0.24);
+            font-size: 0.78rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+          }
+          .calendar-edit-copy h1 {
+            margin: 0;
+            color: #f8fafc;
+            font-size: clamp(2rem, 4vw, 3.4rem);
+            line-height: 1.02;
+          }
+          .calendar-edit-copy p {
+            margin: 0;
+            color: #dbeafe;
+            font-size: 0.98rem;
+            line-height: 1.65;
+          }
+          .calendar-edit-grid {
+            display: grid;
+            gap: 14px;
+            margin-top: 8px;
+          }
+          .calendar-edit-field {
+            display: grid;
+            gap: 6px;
+          }
+          .calendar-edit-field label {
+            color: #dbeafe;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+          }
+          .calendar-edit-field input,
+          .calendar-edit-field textarea {
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            padding: 11px 12px;
+            font-size: 0.95rem;
+            background: #fff;
+            color: #0f172a;
+          }
+          .calendar-edit-field textarea {
+            min-height: 120px;
+            resize: vertical;
+            line-height: 1.5;
+          }
+          .calendar-edit-file {
+            color: #dbeafe;
+            font-size: 0.9rem;
+          }
+          .calendar-edit-upload-note {
+            color: #cbd5e1;
+            font-size: 0.84rem;
+            line-height: 1.5;
+          }
+          .calendar-edit-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+          }
+          .calendar-edit-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+          }
+          .calendar-edit-button {
+            border: none;
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-weight: 800;
+            cursor: pointer;
+          }
+          .calendar-edit-button.primary {
+            background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
+            color: #03261e;
+          }
+          .calendar-edit-button.secondary {
+            background: rgba(255, 255, 255, 0.08);
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+          }
+          .calendar-edit-status {
+            min-height: 1.2rem;
+            color: #bbf7d0;
+            font-size: 0.9rem;
+          }
+          .calendar-edit-disabled {
+            padding: 24px 22px 28px;
+            color: #dbeafe;
+          }
+          .calendar-edit-disabled h1 {
+            margin: 8px 0 12px;
+            color: #f8fafc;
+          }
+          @media (max-width: 860px) {
+            .calendar-edit-body {
+              grid-template-columns: 1fr;
+            }
+            .calendar-edit-row {
+              grid-template-columns: 1fr;
+            }
+          }
+        </style>
+    ''')
+
+    if not current_user or current_user.get('role') != 'admin':
+        ui.add_body_html('''
+          <main class="calendar-edit-page">
+            <section class="calendar-edit-card calendar-edit-disabled">
+              <a class="calendar-edit-back" href="/">Back to schedule</a>
+              <h1>Access denied</h1>
+              <p>This calendar editor is available to authenticated admin users only.</p>
+            </section>
+          </main>
+        ''')
+        return
+
+    with _db_session() as session:
+        calendar = session.get(CalendarORM, calendar_id)
+
+    if calendar is None:
+        ui.add_body_html('''
+          <main class="calendar-edit-page">
+            <section class="calendar-edit-card calendar-edit-disabled">
+              <a class="calendar-edit-back" href="/">Back to schedule</a>
+              <h1>Calendar not found</h1>
+              <p>The requested calendar could not be located.</p>
+            </section>
+          </main>
+        ''')
+        return
+
+    calendar_name = html_escape(calendar.name)
+    calendar_group = html_escape(calendar.group_name or 'General')
+    calendar_color = html_escape(calendar.color or '#2563eb', quote=True)
+    calendar_blurb = html_escape(calendar.blurb or '')
+    calendar_image_src = html_escape(_calendar_info_image_src(calendar), quote=True)
+    calendar_info_href = f'/calendar-info/{html_escape(calendar.id, quote=True)}'
+
+    ui.add_body_html(f'''
+      <main class="calendar-edit-page">
+        <section class="calendar-edit-card">
+          <div class="calendar-edit-top">
+            <a class="calendar-edit-back" href="/">Back to schedule</a>
+            <a class="calendar-edit-back" href="{calendar_info_href}">View information page</a>
+          </div>
+          <div class="calendar-edit-body">
+            <img id="calendar-edit-image" class="calendar-edit-image" src="{calendar_image_src}" alt="{calendar_name} preview" />
+            <div class="calendar-edit-copy">
+              <div class="calendar-edit-kicker">Calendar editor</div>
+              <h1>Edit {calendar_name}</h1>
+              <p>Update the information stored on the calendar record. Changes are reflected in the info page and sidebar after save.</p>
+              <div class="calendar-edit-grid">
+                <div class="calendar-edit-field">
+                  <label for="calendar-edit-name">Calendar Name</label>
+                  <input id="calendar-edit-name" type="text" value="{calendar_name}" />
+                </div>
+                <div class="calendar-edit-row">
+                  <div class="calendar-edit-field">
+                    <label for="calendar-edit-group">Group</label>
+                    <input id="calendar-edit-group" type="text" value="{calendar_group}" />
+                  </div>
+                  <div class="calendar-edit-field">
+                    <label for="calendar-edit-color">Color</label>
+                    <input id="calendar-edit-color" type="color" value="{calendar_color}" />
+                  </div>
+                </div>
+                <div class="calendar-edit-field">
+                  <label for="calendar-edit-blurb">Blurb</label>
+                  <textarea id="calendar-edit-blurb" placeholder="Short description of this calendar">{calendar_blurb}</textarea>
+                </div>
+                <div class="calendar-edit-field">
+                  <label for="calendar-edit-image-file">Image Upload</label>
+                  <input id="calendar-edit-image-file" class="calendar-edit-file" type="file" accept="image/*" />
+                  <input id="calendar-edit-image-url" type="hidden" value="{html_escape(calendar.image_url or '', quote=True)}" />
+                  <div class="calendar-edit-upload-note" id="calendar-edit-image-note"></div>
+                  <div class="calendar-edit-actions">
+                    <button id="calendar-edit-upload" type="button" class="calendar-edit-button secondary">Upload Image</button>
+                  </div>
+                </div>
+                <div class="calendar-edit-status" id="calendar-edit-status"></div>
+                <div class="calendar-edit-actions">
+                  <button id="calendar-edit-save" type="button" class="calendar-edit-button primary">Save Changes</button>
+                  <button id="calendar-edit-reset" type="button" class="calendar-edit-button secondary">Reset</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <script>
+        (function() {{
+          const calendarId = {json.dumps(calendar.id)};
+          const sessionToken = {json.dumps(session_token or '')};
+          const checkSessionUrl = '/api/auth/check-session';
+          const initial = {json.dumps({
+            'name': calendar.name,
+            'groupName': calendar.group_name or 'General',
+            'color': calendar.color or '#2563eb',
+            'blurb': calendar.blurb or '',
+            'imageUrl': calendar.image_url or '',
+          })};
+          const nameInput = document.getElementById('calendar-edit-name');
+          const groupInput = document.getElementById('calendar-edit-group');
+          const colorInput = document.getElementById('calendar-edit-color');
+          const blurbInput = document.getElementById('calendar-edit-blurb');
+          const imageFileInput = document.getElementById('calendar-edit-image-file');
+          const imageInput = document.getElementById('calendar-edit-image-url');
+          const imageUploadButton = document.getElementById('calendar-edit-upload');
+          const imageNote = document.getElementById('calendar-edit-image-note');
+          const saveButton = document.getElementById('calendar-edit-save');
+          const resetButton = document.getElementById('calendar-edit-reset');
+          const status = document.getElementById('calendar-edit-status');
+          const preview = document.getElementById('calendar-edit-image');
+          let storedImageUrl = initial.imageUrl;
+
+          const updateImageNote = () => {{
+            if (storedImageUrl) {{
+              imageNote.textContent = 'Stored image is saved in the database.';
+            }} else {{
+              imageNote.textContent = 'No uploaded image yet. Upload a file to store it in the database.';
+            }}
+          }};
+
+          const resolveAdminToken = async () => {{
+            const urlToken = new URLSearchParams(window.location.search).get('token') || '';
+            if (urlToken) {{
+              return urlToken;
+            }}
+            if (sessionToken) {{
+              return sessionToken;
+            }}
+            try {{
+              const response = await fetch(checkSessionUrl, {{
+                method: 'GET',
+                credentials: 'include',
+                headers: {{ 'Content-Type': 'application/json' }},
+              }});
+              if (!response.ok) {{
+                return '';
+              }}
+              const sessionData = await response.json().catch(() => null);
+              return sessionData && sessionData.authenticated
+                ? String(sessionData.apiToken || sessionData.token || '')
+                : '';
+            }} catch {{
+              return '';
+            }}
+          }};
+
+          const updatePreview = () => {{
+            if (imageInput.value.trim()) {{
+              preview.src = imageInput.value.trim();
+              return;
+            }}
+            preview.src = {json.dumps(_calendar_info_image_src(calendar))};
+          }};
+
+          updateImageNote();
+          imageInput.value = storedImageUrl;
+
+          imageInput.addEventListener('input', updatePreview);
+          imageFileInput.addEventListener('change', () => {{
+            const selectedFile = imageFileInput.files && imageFileInput.files[0];
+            imageNote.textContent = selectedFile
+              ? 'Selected file: ' + selectedFile.name
+              : (storedImageUrl
+                ? 'Stored image is saved in the database.'
+                : 'No uploaded image yet. Upload a file to store it in the database.');
+          }});
+          imageUploadButton.addEventListener('click', async () => {{
+            const selectedFile = imageFileInput.files && imageFileInput.files[0];
+            if (!selectedFile) {{
+              status.textContent = 'Choose an image file first.';
+              return;
+            }}
+            status.textContent = 'Uploading image...';
+            imageUploadButton.disabled = true;
+            try {{
+              const adminToken = await resolveAdminToken();
+              const uploadPath = adminToken
+                ? `/api/admin/calendars/${{encodeURIComponent(calendarId)}}/image?token=${{encodeURIComponent(adminToken)}}`
+                : `/api/admin/calendars/${{encodeURIComponent(calendarId)}}/image`;
+              const formData = new FormData();
+              formData.append('file', selectedFile);
+              const response = await fetch(uploadPath, {{
+                method: 'POST',
+                credentials: 'include',
+                body: formData,
+              }});
+              const data = await response.json().catch(() => ({{ detail: 'Upload failed' }}));
+              if (!response.ok) {{
+                throw new Error(data.detail || 'Upload failed');
+              }}
+              storedImageUrl = data.imageUrl || '';
+              imageInput.value = storedImageUrl;
+              preview.src = storedImageUrl || preview.src;
+              imageFileInput.value = '';
+              updateImageNote();
+              status.textContent = 'Image uploaded.';
+            }} catch (error) {{
+              status.textContent = error instanceof Error ? error.message : String(error);
+            }} finally {{
+              imageUploadButton.disabled = false;
+            }}
+          }});
+          resetButton.addEventListener('click', () => {{
+            nameInput.value = initial.name;
+            groupInput.value = initial.groupName;
+            colorInput.value = initial.color;
+            blurbInput.value = initial.blurb;
+            imageInput.value = initial.imageUrl;
+            storedImageUrl = initial.imageUrl;
+            imageFileInput.value = '';
+            status.textContent = 'Changes reset.';
+            updateImageNote();
+            updatePreview();
+          }});
+
+          saveButton.addEventListener('click', async () => {{
+            const payload = {{
+              name: nameInput.value.trim(),
+              groupName: groupInput.value.trim(),
+              color: colorInput.value.trim(),
+              blurb: blurbInput.value.trim(),
+              imageUrl: imageInput.value.trim(),
+            }};
+            if (!payload.name) {{
+              status.textContent = 'Calendar name is required.';
+              return;
+            }}
+            if (!payload.groupName) {{
+              status.textContent = 'Group is required.';
+              return;
+            }}
+            status.textContent = 'Saving...';
+            saveButton.disabled = true;
+            try {{
+              const adminToken = await resolveAdminToken();
+              const adminPath = adminToken
+                ? `/api/admin/calendars/${{encodeURIComponent(calendarId)}}?token=${{encodeURIComponent(adminToken)}}`
+                : `/api/admin/calendars/${{encodeURIComponent(calendarId)}}`;
+              const response = await fetch(adminPath, {{
+                method: 'PUT',
+                credentials: 'include',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify(payload),
+              }});
+              const data = await response.json().catch(() => ({{ detail: 'Save failed' }}));
+              if (!response.ok) {{
+                throw new Error(data.detail || 'Save failed');
+              }}
+              status.textContent = 'Saved.';
+              updatePreview();
+              window.location.reload();
+            }} catch (error) {{
+              status.textContent = error instanceof Error ? error.message : String(error);
+            }} finally {{
+              saveButton.disabled = false;
+            }}
+          }});
+        }})();
+      </script>
+    ''')
+
+@ui.page('/')
+def index() -> None:
+    ui.add_head_html(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
+    )
+    ui.add_head_html(
+        '<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css"'
+        ' rel="stylesheet" />'
+    )
+    ui.add_head_html(
+        '<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js">'
+        '</script>'
+    )
+    ui.add_head_html('''
+        <style>
+          /* Remove NiceGUI default padding so our layout fills the viewport */
+          html, body { margin:0; padding:0; height:100%; width:100%; background:#062f2d; }
+          body { font-family: 'IBM Plex Sans', sans-serif; }
+          h1, h2, h3, .sidebar-logo { font-family: 'Plus Jakarta Sans', sans-serif; }
+          .q-page, .nicegui-content {
+            padding:0 !important;
+            min-height:100vh;
+            min-height:100dvh;
+            width:100%;
+            background:#062f2d;
+          }
+          .nicegui-content {
+            max-width: none !important;
+          }
+          .nicegui-content > .nicegui-element {
+            width: 100% !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+          }
+          .nicegui-content > .nicegui-element > div {
+            width: 100% !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+          }
+          body > div[id^='c'] {
+            width: 100% !important;
+            max-width: none !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+          }
+          body > div[id^='c'] > div {
+            width: 100% !important;
+            min-height: 100vh;
+            min-height: 100dvh;
+          }
+
+          /* ── Biology landing screen ───────────────────── */
+          .landing-screen {
+            min-height: 100vh;
+            min-height: 100dvh;
+            width: 100%;
+            height: 100vh;
+            height: 100dvh;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            position: fixed;
+            inset: 0;
+            background:
+              radial-gradient(circle at 15% 15%, rgba(16, 185, 129, 0.25), transparent 45%),
+              radial-gradient(circle at 80% 30%, rgba(20, 184, 166, 0.2), transparent 40%),
+              radial-gradient(circle at 25% 80%, rgba(132, 204, 22, 0.16), transparent 45%),
+              linear-gradient(145deg, #042f2e 0%, #0b3b33 45%, #062f2d 100%);
+            color: #e7fff7;
+            z-index: 50;
+            overflow: hidden;
+            isolation: isolate;
+          }
+          #landing-screen {
+            left: 50% !important;
+            top: 0 !important;
+            right: auto !important;
+            bottom: 0 !important;
+            width: 100vw !important;
+            width: 100svw !important;
+            height: 100vh !important;
+            height: 100svh !important;
+            min-height: 100vh !important;
+            min-height: 100svh !important;
+            margin: 0 !important;
+            transform: translateX(-50%) !important;
+          }
+          .landing-screen::before,
+          .landing-screen::after {
+            content: '';
+            position: absolute;
+            width: 460px;
+            height: 460px;
+            border-radius: 50%;
+            border: 1px solid rgba(167, 243, 208, 0.15);
+            filter: blur(0.2px);
+            pointer-events: none;
+          }
+          .landing-screen::before { top: -160px; right: -120px; }
+          .landing-screen::after { bottom: -180px; left: -140px; }
+          .landing-card {
+            width: min(560px, calc(100% - 32px));
+            background: linear-gradient(145deg, rgba(6, 24, 27, 0.84) 0%, rgba(10, 39, 34, 0.78) 100%);
+            border: 1px solid rgba(167, 243, 208, 0.24);
+            border-radius: 28px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 28px 70px rgba(2, 8, 16, 0.42);
+            padding: clamp(22px, 4vw, 34px);
+            position: relative;
+            z-index: 2;
+          }
+          .landing-content {
+            width: 100%;
+            position: relative;
+            z-index: 2;
+          }
+          .landing-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.76rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            padding: 7px 12px;
+            border-radius: 999px;
+            color: #d1fae5;
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(134, 239, 172, 0.35);
+          }
+          .landing-title {
+            margin: 14px 0 8px;
+            font-size: clamp(1.65rem, 4.8vw, 2.7rem);
+            line-height: 1.15;
+            color: #f0fdf4;
+          }
+          .landing-subtitle {
+            margin: 0;
+            color: #c7f9e7;
+            font-size: 1rem;
+            line-height: 1.6;
+            max-width: 32ch;
+          }
+          .landing-form {
+            margin-top: 22px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+          }
+          .landing-input {
+            border: 1px solid rgba(134, 239, 172, 0.38);
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 1rem;
+            color: #ecfeff;
+            background: rgba(12, 36, 40, 0.72);
+          }
+          .landing-input::placeholder { color: rgba(191, 219, 254, 0.8); }
+          .landing-input:focus {
+            outline: none;
+            border-color: #34d399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.22);
+          }
+          .landing-submit {
+            border: none;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
+            color: #03261e;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+          }
+          .landing-submit:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 22px rgba(52, 211, 153, 0.35);
+          }
+          .landing-help {
+            margin: 10px 0 0;
+            font-size: 0.88rem;
+            color: #bbf7d0;
+            min-height: 1.25rem;
+          }
+          .ws-status {
+            margin: 10px 12px 14px;
+            pointer-events: none;
+            display: grid;
+            gap: 4px;
+            background: rgba(15, 23, 42, 0.62);
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 0.74rem;
+            line-height: 1.25;
+            font-family: Consolas, 'Courier New', monospace;
+            min-width: 0;
+            box-shadow: 0 8px 18px rgba(2, 6, 23, 0.24);
+          }
+          .ws-block-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            display: none;
+            visibility: hidden;
+            opacity: 0;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(2, 6, 23, 0.56);
+            backdrop-filter: blur(3px);
+            pointer-events: auto;
+            transition: opacity 0.16s ease;
+          }
+          dialog.ws-block-overlay {
+            border: none;
+            padding: 0;
+            background: transparent;
+            max-width: none;
+            max-height: none;
+          }
+          dialog.ws-block-overlay::backdrop {
+            background: rgba(2, 6, 23, 0.56);
+            backdrop-filter: blur(3px);
+          }
+          dialog.ws-block-overlay[open] {
+            display: flex;
+            visibility: visible;
+            opacity: 1;
+          }
+          .ws-block-overlay.visible {
+            display: flex;
+            visibility: visible;
+            opacity: 1;
+          }
+          .ws-block-card {
+            width: min(760px, calc(100% - 24px));
+            border-radius: 18px;
+            border: 2px solid rgba(248, 113, 113, 0.6);
+            background: linear-gradient(160deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98));
+            box-shadow: 0 24px 64px rgba(2, 6, 23, 0.55);
+            color: #fee2e2;
+            text-align: center;
+            padding: clamp(20px, 3.2vw, 36px);
+          }
+          .ws-block-title {
+            margin: 0;
+            font-size: clamp(1.65rem, 4.6vw, 2.95rem);
+            line-height: 1.1;
+            font-weight: 900;
+            letter-spacing: 0.02em;
+            color: #fecaca;
+          }
+          .ws-block-message {
+            margin: 10px 0 0;
+            font-size: clamp(1rem, 2.3vw, 1.34rem);
+            color: #fecdd3;
+            line-height: 1.42;
+          }
+          .ws-block-state {
+            margin-top: 12px;
+            font-size: 0.94rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #fda4af;
+          }
+          .ws-block-refresh {
+            margin-top: 28px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 36px;
+            font-size: clamp(1rem, 2.4vw, 1.25rem);
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: #fff;
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            border: 2px solid rgba(252, 165, 165, 0.45);
+            border-radius: 12px;
+            cursor: pointer;
+            box-shadow: 0 4px 18px rgba(220, 38, 38, 0.45);
+            transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+            pointer-events: auto;
+          }
+          .ws-block-refresh:hover {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            box-shadow: 0 6px 24px rgba(220, 38, 38, 0.6);
+            transform: translateY(-1px);
+          }
+          .ws-block-refresh:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 10px rgba(220, 38, 38, 0.4);
+          }
+          .override-actions {
+            margin-top: 24px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+          }
+          .override-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 22px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.15s;
+          }
+          .override-btn:active {
+            transform: translateY(1px);
+          }
+          .override-btn-confirm {
+            color: #fff;
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            border-color: rgba(252, 165, 165, 0.45);
+            box-shadow: 0 4px 18px rgba(220, 38, 38, 0.45);
+          }
+          .override-btn-confirm:hover {
+            box-shadow: 0 6px 24px rgba(220, 38, 38, 0.6);
+            transform: translateY(-1px);
+          }
+          .override-btn-cancel {
+            color: #fee2e2;
+            background: rgba(15, 23, 42, 0.8);
+            border-color: rgba(248, 113, 113, 0.35);
+          }
+          body.ws-input-blocked {
+            overflow: hidden;
+          }
+          body.ws-input-blocked #app-shell,
+          body.ws-input-blocked #landing-screen,
+          body.ws-input-blocked dialog {
+            pointer-events: none;
+            user-select: none;
+          }
+          /* Hide NiceGUI's built-in "Trying to reconnect…" notification — our overlay replaces it */
+          body.ws-input-blocked .q-notifications__list,
+          body.ws-input-blocked [class*="nicegui-reconnect"],
+          body.ws-input-blocked .nicegui-reconnect-dialog {
+            display: none !important;
+          }
+          /* ── Save toast ───────────────────────────────────────────── */
+          #save-toast {
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            z-index: 9000;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            min-width: 260px;
+            max-width: min(400px, calc(100vw - 36px));
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            border: 1.5px solid rgba(52, 211, 153, 0.45);
+            border-radius: 14px;
+            box-shadow: 0 8px 32px rgba(2,6,23,0.38);
+            padding: 14px 18px;
+            color: #e2e8f0;
+            font-size: 0.93rem;
+            line-height: 1.4;
+            pointer-events: auto;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+          }
+          #save-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+          }
+          .save-toast-icon {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(52, 211, 153, 0.18);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            margin-top: 1px;
+          }
+          .save-toast-body {
+            flex: 1;
+          }
+          .save-toast-close {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            background: none;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0;
+            line-height: 1;
+            margin-top: -2px;
+            transition: color 0.12s ease;
+          }
+          .save-toast-close:hover {
+            color: #e2e8f0;
+          }
+          .save-toast-title {
+            font-weight: 700;
+            color: #34d399;
+            margin-bottom: 2px;
+          }
+          .save-toast-sub {
+            color: #94a3b8;
+            font-size: 0.82rem;
+          }
+          .save-toast--error {
+            border-color: rgba(239, 68, 68, 0.45);
+          }
+          .save-toast--error .save-toast-icon {
+            background: rgba(239, 68, 68, 0.18);
+          }
+          .save-toast--error .save-toast-title {
+            color: #f87171;
+          }
+          .ws-status-title {
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.67rem;
+          }
+          .ws-status-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+          }
+          .ws-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #f59e0b;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25);
+            flex: 0 0 auto;
+          }
+          .ws-indicator.connected {
+            background: #22c55e;
+            box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+          }
+          .ws-indicator.disconnected {
+            background: #ef4444;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22);
+          }
+          .ws-indicator.error {
+            background: #f97316;
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.24);
+          }
+          .slime-field {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 0;
+          }
+          .slime-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            opacity: 0.82;
+            filter: saturate(1.2) contrast(1.08) blur(0.15px);
+          }
+          .slime-vein-glow {
+            position: absolute;
+            inset: 0;
+            background:
+              radial-gradient(circle at 22% 30%, rgba(52, 211, 153, 0.18), transparent 40%),
+              radial-gradient(circle at 70% 70%, rgba(45, 212, 191, 0.14), transparent 45%);
+            mix-blend-mode: screen;
+            opacity: 0.85;
+          }
+          .card-sheen {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(220, 252, 231, 0.06), transparent 28%);
+            pointer-events: none;
+            z-index: 1;
+            border-radius: 28px;
+          }
+
+          /* ── App shell ─────────────────────────────── */
+          .app-layout {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            background: #f0f4fa;
+          }
+
+          /* ── Left sidebar ──────────────────────────── */
+          .sidebar {
+            width: 220px;
+            flex-shrink: 0;
+            background: #1e293b;
+            color: #e2e8f0;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+          }
+          .sidebar-nav-spacer { flex: 1; min-height: 18px; }
+          .sidebar-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 12px 12px 16px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            color: #cbd5e1;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            border: 1px solid rgba(148, 163, 184, 0.15);
+          }
+          .sidebar-nav-item:hover,
+          .sidebar-nav-item.active {
+            background: #334155;
+            color: #f8fafc;
+          }
+          .sidebar-nav-icon {
+            font-size: 0.92rem;
+            width: 18px;
+            text-align: center;
+          }
+          .sidebar-logo {
+            padding: 20px 16px 16px;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            color: #f8fafc;
+            border-bottom: 1px solid #334155;
+            cursor: pointer;
+          }
+          .sidebar-section-title {
+            padding: 14px 16px 6px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: #94a3b8;
+          }
+          .sidebar-cal-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background 0.15s;
+          }
+          .sidebar-cal-item:hover { background: #334155; }
+          .sidebar-cal-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            flex: 1;
+          }
+          .sidebar-cal-info {
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            border: 1px solid #475569;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+          }
+          .sidebar-cal-info:hover {
+            background: #1e293b;
+            border-color: #94a3b8;
+          }
+
+          /* Colour dot next to label */
+          .cal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            flex-shrink: 0;
+          }
+
+          /* Custom checkbox whose tick/border adopts the calendar colour via CSS var */
+          .cal-checkbox {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 4px;
+            border: 2px solid var(--cal-color, #64748b);
+            cursor: pointer;
+            flex-shrink: 0;
+            position: relative;
+            transition: background 0.15s;
+          }
+          .cal-checkbox:checked { background: var(--cal-color, #64748b); }
+          .cal-checkbox:checked::after {
+            content: '';
+            position: absolute;
+            left: 2px; top: -1px;
+            width: 5px; height: 9px;
+            border: 2px solid #fff;
+            border-top: none; border-left: none;
+            transform: rotate(45deg);
+          }
+          .cal-name { font-size: 0.86rem; color: #cbd5e1; }
+
+          /* ── Main content ──────────────────────────── */
+          .main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 22px 24px;
+            min-width: 0;
+          }
+          .calendar-card {
+            background: #fff;
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: 0 4px 24px rgba(15,23,42,0.07);
+          }
+          .admin-panel {
+            display: grid;
+            gap: 18px;
+          }
+          .admin-panel[hidden] { display: none; }
+          .access-panel {
+            display: grid;
+            gap: 18px;
+          }
+          .access-panel[hidden] { display: none; }
+          .admin-card {
+            background: #fff;
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 4px 24px rgba(15,23,42,0.07);
+          }
+          .admin-card h2 {
+            margin: 0 0 8px;
+            color: #0f172a;
+            font-size: 1.15rem;
+          }
+          .admin-card p {
+            margin: 0;
+            color: #475569;
+            font-size: 0.94rem;
+          }
+          .admin-link-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 16px;
+          }
+          .admin-link-card {
+            border: 1px solid #dbe4f0;
+            border-radius: 12px;
+            padding: 14px;
+            background: #f8fafc;
+            display: grid;
+            gap: 12px;
+          }
+          .admin-link-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+          }
+          .admin-link-token {
+            font-family: "IBM Plex Sans", sans-serif;
+            font-size: 0.84rem;
+            color: #0f766e;
+            word-break: break-all;
+          .access-catalog-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 16px;
+          }
+          }
+          .admin-link-meta {
+            font-size: 0.84rem;
+            color: #64748b;
+          }
+          .admin-resource-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+          }
+          .access-group-card {
+            border: 1px solid #dbe4f0;
+            border-radius: 12px;
+            padding: 16px;
+            background: linear-gradient(180deg, #fff, #f8fbff);
+            display: grid;
+            gap: 10px;
+          }
+          .access-group-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+          }
+          .access-group-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #0f172a;
+          }
+          .access-group-subtitle {
+            margin-top: 3px;
+            font-size: 0.84rem;
+            color: #64748b;
+          }
+          .access-group-calendar-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding-left: 10px;
+          }
+          .access-pill-button {
+            border: 1px solid transparent;
+            border-radius: 999px;
+            padding: 8px 14px;
+            font-weight: 800;
+            font-size: 0.82rem;
+            cursor: pointer;
+            background: #0e7490;
+            color: #fff;
+            transition: transform 0.15s, box-shadow 0.15s, background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .access-pill-button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 16px rgba(14, 116, 144, 0.24);
+            background: #155e75;
+          }
+          .access-pill-button--granted,
+          .access-pill-button:disabled {
+            background: #cbd5e1;
+            color: #64748b;
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+          }
+          .access-group-request {
+            margin-left: auto;
+          }
+          .access-group-request[data-state="available"] {
+            background: #0e7490;
+            color: #fff;
+          }
+          .access-group-request[data-state="pending"],
+          .access-group-request[data-state="requested"],
+          .access-group-request[data-state="group-pending"] {
+            background: #fff7ed;
+            color: #f59e0b;
+            border-color: #fed7aa;
+          }
+          .access-group-request[data-state="hidden"] {
+            background: #fff7ed;
+            color: #f59e0b;
+            border-color: #fed7aa;
+          }
+          .access-group-request[data-state="granted"],
+          .access-group-request[data-state="approved"] {
+            background: #16a34a;
+            color: #fff;
+          }
+          .access-pill-button[data-state="pending"],
+          .access-pill-button[data-state="requested"],
+          .access-pill-button[data-state="group-pending"] {
+            background: #fff7ed;
+            color: #f59e0b;
+            border-color: #fed7aa;
+            box-shadow: none;
+          }
+          .access-pill-button[data-state="hidden"] {
+            background: #fff7ed;
+            color: #f59e0b;
+            border-color: #fed7aa;
+            box-shadow: none;
+          }
+          .access-pill-button[data-state="pending"]:hover:not(:disabled),
+          .access-pill-button[data-state="group-pending"]:hover:not(:disabled),
+          .access-pill-button[data-state="hidden"]:hover:not(:disabled) {
+            background: #ffedd5;
+            color: #ea580c;
+            box-shadow: 0 8px 16px rgba(245, 158, 11, 0.14);
+          }
+          .access-group-assets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding-left: 10px;
+          }
+          .access-asset-pill {
+            background: #e2e8f0;
+            color: #0f172a;
+            border-color: #cbd5e1;
+            font-weight: 700;
+          }
+          .access-asset-pill:hover:not(:disabled) {
+            background: #cbd5e1;
+            color: #0f172a;
+          }
+          .access-asset-pill[data-state="granted"],
+          .access-asset-pill[data-state="approved"] {
+            background: #22c55e;
+            color: #ffffff;
+            border-color: #16a34a;
+          }
+          .access-asset-pill[data-state="granted"]:hover:not(:disabled) {
+            background: #16a34a;
+            color: #ffffff;
+          }
+          .access-asset-pill[data-state="hidden"] {
+            background: #fff7ed;
+            color: #f59e0b;
+            border-color: #fed7aa;
+            box-shadow: none;
+          }
+          .access-asset-pill[data-state="hidden"]:hover:not(:disabled) {
+            background: #ffedd5;
+            color: #ea580c;
+            box-shadow: 0 8px 16px rgba(245, 158, 11, 0.14);
+          }
+          .admin-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+          }
+          .admin-status-pill--pending {
+            background: #fff7ed;
+            color: #f59e0b;
+          }
+          .admin-status-pill--requested {
+            background: #fff7ed;
+            color: #f59e0b;
+          }
+          .admin-status-pill--hidden {
+            background: #fff7ed;
+            color: #f59e0b;
+          }
+          .admin-status-pill--approved {
+            background: #ecfdf5;
+            color: #16a34a;
+          }
+          .admin-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            color: #0f172a;
+            font-size: 0.82rem;
+          }
+          .admin-pill-group {
+            background: #dbeafe;
+            color: #1e3a8a;
+          }
+          .admin-pill-remove {
+            border: none;
+            background: transparent;
+            color: #334155;
+            font-size: 0.9rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 2px;
+          }
+          .admin-pill-remove:hover { color: #991b1b; }
+          .admin-editor-row {
+            display: grid;
+            grid-template-columns: minmax(220px, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+          }
+          .admin-datalist-input {
+            width: 100%;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            padding: 10px 12px;
+            font-size: 0.94rem;
+            background: #fff;
+          }
+          .admin-helper {
+            color: #64748b;
+            font-size: 0.82rem;
+          }
+          .admin-resource-catalog {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+          }
+          .admin-resource-option {
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            color: #1e3a8a;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+          }
+          .admin-resource-option:hover {
+            background: #dbeafe;
+            border-color: #93c5fd;
+          }
+          .admin-resource-option.assigned {
+            background: #ecfdf5;
+            border-color: #86efac;
+            color: #166534;
+            cursor: default;
+          }
+          .admin-section-title {
+            margin-top: 10px;
+            margin-bottom: 4px;
+            color: #475569;
+            font-size: 0.83rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+          }
+          .admin-user-role {
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+          }
+          .admin-user-role.admin {
+            background: #dcfce7;
+            color: #166534;
+          }
+          .admin-user-role.user {
+            background: #e2e8f0;
+            color: #334155;
+          }
+          #calendar { min-height: 680px; }
+
+          /* FullCalendar button theming */
+          .fc .fc-button-primary { background:#0e7490; border-color:#0e7490; }
+          .fc .fc-button-primary:hover { background:#155e75; border-color:#155e75; }
+
+          /* ── Event dialog ──────────────────────────── */
+          .event-dialog {
+            border: none;
+            border-radius: 14px;
+            width: min(520px, calc(100% - 24px));
+            max-width: 520px;
+            box-shadow: 0 18px 45px rgba(15,23,42,0.2);
+            padding: 0;
+          }
+          .event-dialog::backdrop {
+            background: rgba(15,23,42,0.4);
+            backdrop-filter: blur(2px);
+          }
+          .event-dialog-header {
+            padding: 14px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #164e63;
+          }
+          .overlap-dialog-header {
+            color: #991b1b;
+          }
+          .overlap-dialog-message {
+            margin: 0;
+            font-size: 0.95rem;
+            color: #334155;
+            line-height: 1.45;
+            white-space: pre-wrap;
+          }
+          .event-dialog-body { padding: 14px 16px; display: grid; gap: 10px; }
+          .event-dialog-field { display: grid; gap: 4px; }
+          .event-dialog-field label { font-size: 0.9rem; color: #334155; }
+          .event-dialog-field input,
+          .event-dialog-field select,
+          .event-dialog-field textarea {
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 9px 10px;
+            font-size: 0.95rem;
+          }
+          .event-dialog-field--emphasis {
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            background: #f8fafc;
+          }
+          .event-dialog-field--emphasis > label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #0f172a;
+            margin: 0;
+          }
+          .event-dialog-field--emphasis input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            margin: 0;
+            padding: 0;
+            accent-color: #0e7490;
+          }
+          .event-dialog-field textarea {
+            min-height: 140px;
+            resize: vertical;
+            line-height: 1.4;
+          }
+          .event-calendar-list {
+            display: grid;
+            gap: 8px;
+            max-height: 180px;
+            overflow: auto;
+            padding: 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: #f8fafc;
+          }
+          .event-calendar-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+          .event-calendar-item--hidden {
+            /* the row itself stays visible; only the availability is dimmed */
+          }
+          .event-calendar-item--hidden .event-calendar-toggle,
+          .event-calendar-item--hidden .event-calendar-dot,
+          .event-calendar-item--hidden .event-calendar-label {
+            opacity: 0.48;
+          }
+          .event-calendar-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            flex: 1;
+          }
+          .event-calendar-info {
+            margin-left: auto;
+            width: 26px;
+            height: 26px;
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            background: #fff;
+            color: #0f766e;
+            font-weight: 800;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+          }
+          .event-calendar-info:hover {
+            background: #ecfeff;
+            border-color: #5eead4;
+          }
+          .event-calendar-info--booked {
+            color: #b91c1c;
+            border-color: #fca5a5;
+            background: #fef2f2;
+          }
+          .event-calendar-info--booked:hover {
+            background: #fee2e2;
+            border-color: #ef4444;
+          }
+          .calendar-hover-tooltip {
+            position: fixed;
+            z-index: 2200;
+            display: none;
+            width: min(320px, calc(100vw - 20px));
+            background: rgba(255, 255, 255, 0.98);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 16px;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.28);
+            overflow: hidden;
+            pointer-events: none;
+          }
+          .calendar-hover-tooltip--booked {
+            border-color: #ef4444;
+            box-shadow: 0 18px 40px rgba(185, 28, 28, 0.32);
+          }
+          .calendar-hover-tooltip--booked .calendar-hover-copy {
+            background: #fef2f2;
+            border-top: 1px solid #fca5a5;
+          }
+          .calendar-hover-tooltip img {
+            display: block;
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            object-fit: cover;
+            background: #e2e8f0;
+          }
+          .calendar-hover-copy {
+            padding: 10px 12px 12px;
+          }
+          .calendar-hover-tooltip--booked .calendar-hover-title {
+            color: #b91c1c;
+          }
+          .calendar-hover-tooltip--booked .calendar-hover-subtitle {
+            color: #dc2626;
+          }
+          .calendar-hover-title {
+            font-size: 0.92rem;
+            font-weight: 800;
+            color: #0f172a;
+            line-height: 1.3;
+          }
+          .calendar-hover-subtitle {
+            margin-top: 4px;
+            font-size: 0.8rem;
+            color: #475569;
+          }
+          .event-calendar-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            flex-shrink: 0;
+          }
+          .event-calendar-label {
+            font-size: 0.92rem;
+            color: #334155;
+          }
+          .event-dialog-row { display:grid; gap:10px; grid-template-columns:1fr 1fr; }
+          .event-dialog-actions {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 16px 14px;
+            border-top: 1px solid #e2e8f0;
+            gap: 8px;
+          }
+          .btn { border:none; border-radius:8px; padding:9px 12px; font-weight:600; cursor:pointer; }
+          .btn-primary { background:#0e7490; color:#fff; }
+          .btn-danger  { background:#dc2626; color:#fff; }
+          .btn-neutral { background:#e2e8f0; color:#0f172a; }
+          .btn-group   { display:flex; gap:8px; }
+          .event-notes-tooltip {
+            position: fixed;
+            z-index: 2000;
+            max-width: min(360px, calc(100vw - 24px));
+            background: rgba(15, 23, 42, 0.95);
+            color: #f8fafc;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+            padding: 10px 12px;
+            font-size: 0.86rem;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            pointer-events: none;
+            display: none;
+          }
+          .event-lock-icon {
+            margin-right: 6px;
+            font-size: 0.9em;
+            vertical-align: text-bottom;
+          }
+          @media (max-width:640px) {
+            .landing-form { grid-template-columns: 1fr; }
+            .event-dialog-row { grid-template-columns:1fr; }
+          }
+        </style>
+    ''')
+
+    # Full-page layout (sidebar + main) plus the dialog
+    ui.html('''
+        <div id="landing-screen" class="landing-screen">
+          <div class="slime-field" aria-hidden="true">
+            <canvas id="slime-canvas" class="slime-canvas"></canvas>
+            <div class="slime-vein-glow"></div>
+          </div>
+          <section class="landing-card">
+            <div class="card-sheen"></div>
+            <div class="landing-content">
+              <div class="landing-badge">&#129516; Bioinformatics Access Portal</div>
+              <h1 class="landing-title">Cell-Cycle Scheduling Dashboard</h1>
+              <p class="landing-subtitle">
+                Enter your access token to open the shared lab scheduling view.
+              </p>
+
+            <div class="landing-form">
+                <input id="token-input" class="landing-input" type="text" placeholder="Enter access token (for example: science)" />
+                <button id="token-submit" class="landing-submit" type="button">Open Schedule</button>
+              </div>
+              <p id="token-help" class="landing-help"></p>
+
+              <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); text-align: center;">
+                <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 12px;">Or sign in with your university account:</p>
+                <button id="google-login-btn" class="landing-submit" type="button" style="background: #4285F4; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                  </svg>
+                  Sign in with Google
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="app-shell" class="app-layout" style="display:none;">
+
+          <!-- Left sidebar -->
+          <nav class="sidebar">
+            <div id="sidebar-logo" class="sidebar-logo">&#128300; Lab Scheduler</div>
+            <div class="sidebar-section-title">Calendars</div>
+            <div id="calendar-list"></div>
+            <div class="sidebar-nav-spacer"></div>
+            <div id="access-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#128272;</span>
+              <span>Request Access</span>
+            </div>
+            <div id="admin-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#9881;</span>
+              <span>Admin</span>
+            </div>
+            <div id="logout-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#128682;</span>
+              <span id="logout-nav-label">Logout</span>
+            </div>
+            <div id="token-action-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#128179;</span>
+              <span id="token-action-label">Login</span>
+            </div>
+            <aside id="ws-status" class="ws-status" aria-live="polite">
+              <div class="ws-status-title">Realtime Sync</div>
+              <div class="ws-status-row">
+                <span id="ws-indicator" class="ws-indicator"></span>
+                <span id="ws-connection-state">Connecting...</span>
+              </div>
+              <div id="ws-last-change">Last change received: never</div>
+            </aside>
+          </nav>
+
+          <!-- Main area -->
+          <div class="main-content">
+            <div id="calendar-view" class="calendar-card">
+              <div id="calendar"></div>
+            </div>
+            <div id="access-panel" class="access-panel" hidden>
+              <section class="admin-card">
+                <h2>Request Access</h2>
+                <p>Request access to a whole group or an individual calendar.</p>
+                <div id="access-catalog-grid" class="access-catalog-grid"></div>
+              </section>
+            </div>
+            <div id="admin-panel" class="admin-panel" hidden>
+              <section class="admin-card">
+                <h2>Group Manager</h2>
+                <p>Create groups and move resources between them.</p>
+                <div id="admin-group-grid" class="admin-link-grid"></div>
+              </section>
+              <section class="admin-card">
+                <h2>User Access Manager</h2>
+                <p>Manage each user's allowed calendars. Remove individual calendars or remove a whole assigned group in one click.</p>
+                <div id="admin-user-grid" class="admin-link-grid"></div>
+              </section>
+              <section class="admin-card">
+                <h2>Access Requests</h2>
+                <p>Review pending requests and hidden access rows.</p>
+                <div id="admin-access-requests-grid" class="admin-link-grid"></div>
+              </section>
+            </div>
+          </div>
+
+        </div>
+
+        <div id="save-toast" role="status" aria-live="polite">
+          <div class="save-toast-icon">&#10003;</div>
+          <div class="save-toast-body">
+            <div class="save-toast-title" id="save-toast-title">Saved</div>
+            <div class="save-toast-sub" id="save-toast-sub"></div>
+          </div>
+          <button class="save-toast-close" id="save-toast-close" type="button" aria-label="Close notification">&#10005;</button>
+        </div>
+
+        <div id="ws-block-overlay" class="ws-block-overlay" aria-live="assertive" role="alertdialog" aria-modal="true">
+          <div class="ws-block-card">
+            <h2 class="ws-block-title">Realtime Sync Lost</h2>
+            <p class="ws-block-message">Connection to the update channel was lost. Inputs are temporarily locked until sync is restored.</p>
+            <div id="ws-block-state" class="ws-block-state">Reconnecting...</div>
+            <button class="ws-block-refresh" onclick="window.__allowManualReload()">&#8635;&nbsp;&nbsp;Refresh Page</button>
+          </div>
+        </div>
+
+        <dialog id="override-block-overlay" class="ws-block-overlay" role="alertdialog" aria-modal="true" aria-hidden="true">
+          <div class="ws-block-card">
+            <h2 class="ws-block-title">Locked Event Override</h2>
+            <p class="ws-block-message">This booking is locked because someone may be relying on it. Only alter your own locked bookings, unless you have already discussed it with the person booked or the instrument owner in charge.</p>
+            <div class="override-actions">
+              <button id="override-cancel" class="override-btn override-btn-cancel" type="button">Cancel</button>
+              <button id="override-confirm" class="override-btn override-btn-confirm" type="button">Override</button>
+            </div>
+          </div>
+        </dialog>
+
+        <!-- Event dialog (outside layout so it centres in viewport) -->
+        <dialog id="event-dialog" class="event-dialog">
+          <div class="event-dialog-header" id="event-dialog-title">Event</div>
+          <div class="event-dialog-body">
+            <div class="event-dialog-field">
+              <label for="event-title">User</label>
+              <input id="event-title" type="text" placeholder="User name" />
+            </div>
+            <div class="event-dialog-field">
+              <label for="event-name">Event Name</label>
+              <input id="event-name" type="text" placeholder="Event name" list="event-name-options" />
+              <datalist id="event-name-options"></datalist>
+            </div>
+            <div class="event-dialog-field">
+              <label for="event-contact">Contact</label>
+              <input id="event-contact" type="text" placeholder="Contact details" />
+            </div>
+            <div class="event-dialog-field">
+              <label>Calendars</label>
+              <div id="event-calendars" class="event-calendar-list"></div>
+            </div>
+            <div class="event-dialog-row">
+              <div class="event-dialog-field">
+                <label for="event-start">Start</label>
+                <input id="event-start" type="datetime-local" />
+              </div>
+              <div class="event-dialog-field">
+                <label for="event-end">End</label>
+                <input id="event-end" type="datetime-local" />
+              </div>
+            </div>
+            <div class="event-dialog-field event-dialog-field--emphasis">
+              <label><input id="event-committed" type="checkbox" /> Check this box when an experiment is underway and you are now relying on the instrument.</label>
+            </div>
+            <div class="event-dialog-field">
+              <label><input id="event-all-day" type="checkbox" /> All day</label>
+            </div>
+            <div class="event-dialog-field">
+              <label><input id="event-recur-enabled" type="checkbox" /> Recurring event</label>
+            </div>
+            <div id="event-recur-fields" class="event-dialog-row" style="display:none;">
+              <div class="event-dialog-field">
+                <label for="event-recur-freq">Frequency</label>
+                <select id="event-recur-freq">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+              <div class="event-dialog-field">
+                <label for="event-recur-interval">Interval</label>
+                <input id="event-recur-interval" type="number" min="1" step="1" value="1" />
+              </div>
+            </div>
+            <div id="event-recur-until-field" class="event-dialog-field" style="display:none;">
+              <label for="event-recur-until">Repeat until (optional)</label>
+              <input id="event-recur-until" type="datetime-local" />
+            </div>
+            <div class="event-dialog-field">
+              <label for="event-notes">Notes</label>
+              <textarea id="event-notes" placeholder="Add notes for this event..."></textarea>
+            </div>
+          </div>
+          <div class="event-dialog-actions">
+            <button id="event-delete" class="btn btn-danger"  type="button" style="visibility:hidden;">Delete</button>
+            <div class="btn-group">
+              <button id="event-cancel" class="btn btn-neutral" type="button">Cancel</button>
+              <button id="event-save"   class="btn btn-primary" type="button">Save</button>
+            </div>
+          </div>
+        </dialog>
+
+        <dialog id="overlap-dialog" class="event-dialog">
+          <div id="overlap-dialog-title" class="event-dialog-header overlap-dialog-header">Scheduling Conflict</div>
+          <div class="event-dialog-body">
+            <p id="overlap-dialog-message" class="overlap-dialog-message">
+              This event overlaps another event on the same calendar.
+            </p>
+          </div>
+          <div class="event-dialog-actions" style="justify-content:flex-end;">
+            <button id="overlap-dialog-ok" class="btn btn-primary" type="button">OK</button>
+          </div>
+        </dialog>
+
+        <dialog id="group-create-resource-dialog" class="event-dialog">
+          <div id="group-create-resource-dialog-title" class="event-dialog-header overlap-dialog-header">Create Resource</div>
+          <div class="event-dialog-body">
+            <p id="group-create-resource-dialog-message" class="overlap-dialog-message"></p>
+          </div>
+          <div class="event-dialog-actions" style="justify-content:flex-end;">
+            <button id="group-create-resource-dialog-cancel" class="btn btn-neutral" type="button">Cancel</button>
+            <button id="group-create-resource-dialog-confirm" class="btn btn-primary" type="button">Create & Add</button>
+          </div>
+        </dialog>
+    ''')
+
+    # Standalone offline guard — injected as initial page HTML, runs immediately
+    # on parse (no FullCalendar or calendar-WS dependency). Hooks window.socket
+    # the moment socket.io is ready so the overlay fires even if the server drops
+    # before FullCalendar finishes loading. Also prevents automatic page reloads.
+    ui.add_body_html('''
+<style id="page-fouc-hide">body{opacity:0!important}</style>
+<script>
+(function installOfflineGuard() {
+  // Reveal the page cleanly — called by initializeCalendar once we know
+  // what to show (landing screen or app shell). Fades in from opacity:0.
+  window.__revealPage = function() {
+    var s = document.getElementById('page-fouc-hide');
+    if (s) s.remove();
+    document.body.style.transition = 'opacity 0.12s ease';
+    document.body.style.opacity = '1';
+  };
+
+  // Prevent automatic reloads (e.g., from socket.io reconnection logic).
+  // Only allow manual reloads via the explicit button.
+  var allowReload = false;
+  var origReload = window.location.reload;
+  window.location.reload = function(forceReload) {
+    if (allowReload) return origReload.call(window.location, forceReload);
+    // Silently ignore non-user-initiated reloads
+  };
+  
+  // Expose a way for the refresh button to actually reload
+  window.__allowManualReload = function() {
+    allowReload = true;
+    window.location.reload();
+  };
+
+  function setOverlay(blocked) {
+    var el = document.getElementById('ws-block-overlay');
+    if (!el) return;
+    if (blocked) {
+      el.classList.add('visible');
+      el.style.display = 'flex';
+      el.style.visibility = 'visible';
+      el.style.opacity = '1';
+      document.body.classList.add('ws-input-blocked');
+    } else {
+      el.classList.remove('visible');
+      el.style.display = 'none';
+      el.style.visibility = 'hidden';
+      el.style.opacity = '0';
+      document.body.classList.remove('ws-input-blocked');
+    }
+  }
+  function hookSocket() {
+    var sock = window.socket;
+    if (!sock) { setTimeout(hookSocket, 50); return; }
+    if (sock.__offlineGuardHooked) return;
+    sock.__offlineGuardHooked = true;
+    sock.on('disconnect', function() { setOverlay(true); });
+    sock.on('connect',    function() { setOverlay(false); });
+    sock.on('reconnect',  function() { setOverlay(false); });
+  }
+  hookSocket();
+})();
+</script>
+    ''')
+
+    ui.add_body_html('''
+<script>
+(function initializeCalendar() {
+  if (window.__labSchedulerClientInitialized) {
+    return;
+  }
+
+  const mountNode = document.getElementById('calendar');
+  if (!mountNode || !window.FullCalendar) {
+    setTimeout(initializeCalendar, 100);
+    return;
+  }
+
+  window.__labSchedulerClientInitialized = true;
+
+  const JSON_HDR = { 'Content-Type': 'application/json' };
+
+  // ── DOM refs ────────────────────────────────────────────────────────────
+  const dialog          = document.getElementById('event-dialog');
+  const dialogTitle     = document.getElementById('event-dialog-title');
+  const titleInput      = document.getElementById('event-title');
+  const eventNameInput  = document.getElementById('event-name');
+  const eventNameOptions = document.getElementById('event-name-options');
+  const contactInput    = document.getElementById('event-contact');
+  const startInput      = document.getElementById('event-start');
+  const endInput        = document.getElementById('event-end');
+  const allDayInput     = document.getElementById('event-all-day');
+  const recurEnabled    = document.getElementById('event-recur-enabled');
+  const recurFields     = document.getElementById('event-recur-fields');
+  const recurUntilField = document.getElementById('event-recur-until-field');
+  const recurFreq       = document.getElementById('event-recur-freq');
+  const recurInterval   = document.getElementById('event-recur-interval');
+  const recurUntil      = document.getElementById('event-recur-until');
+  const notesInput      = document.getElementById('event-notes');
+  const committedInput  = document.getElementById('event-committed');
+  const saveButton      = document.getElementById('event-save');
+  const cancelButton    = document.getElementById('event-cancel');
+  const deleteButton    = document.getElementById('event-delete');
+  const calendarList    = document.getElementById('calendar-list');
+  const sidebarLogo     = document.getElementById('sidebar-logo');
+  const accessNavItem   = document.getElementById('access-nav-item');
+  const adminNavItem    = document.getElementById('admin-nav-item');
+  const logoutNavItem   = document.getElementById('logout-nav-item');
+  const tokenActionNavItem = document.getElementById('token-action-nav-item');
+  const calendarView    = document.getElementById('calendar-view');
+  const accessPanel     = document.getElementById('access-panel');
+  const adminPanel      = document.getElementById('admin-panel');
+  const adminGroupGrid   = document.getElementById('admin-group-grid');
+  const adminUserGrid   = document.getElementById('admin-user-grid');
+  const adminAccessRequestsGrid = document.getElementById('admin-access-requests-grid');
+  const accessCatalogGrid = document.getElementById('access-catalog-grid');
+  const eventCalendars  = document.getElementById('event-calendars');
+  const appShell        = document.getElementById('app-shell');
+  const landingScreen   = document.getElementById('landing-screen');
+  const tokenInput      = document.getElementById('token-input');
+  const tokenSubmit     = document.getElementById('token-submit');
+  const tokenHelp       = document.getElementById('token-help');
+  const wsStatusPanel   = document.getElementById('ws-status');
+  const wsIndicator     = document.getElementById('ws-indicator');
+  const wsConnState     = document.getElementById('ws-connection-state');
+  const wsLastChange    = document.getElementById('ws-last-change');
+  const logoutNavLabel  = document.getElementById('logout-nav-label');
+  const tokenActionLabel = document.getElementById('token-action-label');
+  const saveToast      = document.getElementById('save-toast');
+  const saveToastTitle = document.getElementById('save-toast-title');
+  const saveToastSub   = document.getElementById('save-toast-sub');
+  const saveToastClose = document.getElementById('save-toast-close');
+  let   saveToastTimer = null;
+  const wsBlockOverlay  = document.getElementById('ws-block-overlay');
+  const wsBlockState    = document.getElementById('ws-block-state');
+  const overrideBlockOverlay = document.getElementById('override-block-overlay');
+  const overrideCancelButton = document.getElementById('override-cancel');
+  const overrideConfirmButton = document.getElementById('override-confirm');
+  const overlapDialog   = document.getElementById('overlap-dialog');
+  const overlapTitle    = document.getElementById('overlap-dialog-title');
+  const overlapMessage  = document.getElementById('overlap-dialog-message');
+  const overlapOkButton = document.getElementById('overlap-dialog-ok');
+  const groupCreateResourceDialog = document.getElementById('group-create-resource-dialog');
+  const groupCreateResourceTitle = document.getElementById('group-create-resource-dialog-title');
+  const groupCreateResourceMessage = document.getElementById('group-create-resource-dialog-message');
+  const groupCreateResourceCancel = document.getElementById('group-create-resource-dialog-cancel');
+  const groupCreateResourceConfirm = document.getElementById('group-create-resource-dialog-confirm');
+  const eventNotesTooltip = document.createElement('div');
+  eventNotesTooltip.className = 'event-notes-tooltip';
+  document.body.appendChild(eventNotesTooltip);
+  const calendarHoverTooltip = document.createElement('div');
+  calendarHoverTooltip.className = 'calendar-hover-tooltip';
+  document.body.appendChild(calendarHoverTooltip);
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const dialogState   = { mode: 'create', eventId: null };
+  let   allCalendars  = [];
+  let   currentUser   = null;
+  let   adminUsersData = null;
+  let   accessCatalogData = null;
+  let   currentView   = 'calendar';
+  let   hiddenCals    = new Set();   // ids of deselected calendars
+  let   currentToken  = null;        // token from URL for API requests
+  let   authenticatedSessionToken = null; // session cookie token for the logged-in user
+  let   tokenAllowedCalendars = null; // calendars accessible via token
+  let   tokenAccessRequested = false; // true when the current page was opened via a token URL
+  let   hasValidToken = false;
+  let   dialogLoadedEvents = [];
+  let   dialogSuggestionEvents = [];
+  let   dialogAvailabilityRequestId = 0;
+  let   dialogAvailabilityRefreshTimer = null;
+  let   dialogSuggestionRequestId = 0;
+  let   dialogSuggestionRefreshTimer = null;
+  let   dialogInitialState = null;
+  let   activeCalendarHoverButton = null;
+  let   slimeSimulationStarted = false;
+  let   updatesSocket = null;
+  let   updatesReconnectTimer = null;
+  let   updatesReconnectDelay = 500;
+  let   updatesHeartbeatTimer = null;
+  let   updatesHeartbeatTimeoutTimer = null;
+  let   updatesLastPongAt = 0;
+  let   updatesRefreshInFlight = false;
+  let   updatesRefreshQueued = false;
+  let   updatesConnectionState = 'connecting';
+  let   niceguiConnected = true;   // tracks NiceGUI socket.io connection state
+  let   lastCalendarChangeAt = null;
+  let   wsInputBlocked = false;
+  const AUTH_TOKEN_STORAGE_KEY = 'labSchedulerAuthToken';
+  const PRESERVED_LINK_TOKEN_STORAGE_KEY = 'labSchedulerPreservedLinkToken';
+  const recentLocalChangeIds = new Map();
+  const CLIENT_INSTANCE_ID = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  function setPersistedAuthToken(token) {
+    if (!token) return;
+    try {
+      localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    } catch {
+      // Ignore storage failures (private mode, quota, etc.)
+    }
+  }
+
+  function getPersistedAuthToken() {
+    try {
+      const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+      return token ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearPersistedAuthToken() {
+    try {
+      localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures
+    }
+  }
+
+  function setPreservedLinkToken(token) {
+    if (!token) return;
+    try {
+      localStorage.setItem(PRESERVED_LINK_TOKEN_STORAGE_KEY, token);
+    } catch {
+      // Ignore storage failures
+    }
+  }
+
+  function getPreservedLinkToken() {
+    try {
+      const token = localStorage.getItem(PRESERVED_LINK_TOKEN_STORAGE_KEY);
+      return token ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearPreservedLinkToken() {
+    try {
+      localStorage.removeItem(PRESERVED_LINK_TOKEN_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures
+    }
+  }
+
+  function formatDuration(milliseconds) {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    if (totalSeconds < 60) return `${totalSeconds}s ago`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${seconds}s ago`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m ago`;
+  }
+
+  function newChangeId() {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    return `chg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function isJwtToken(token) {
+    if (!token || typeof token !== 'string') return false;
+    return token.split('.').length === 3;
+  }
+
+  function showSaveToast(title, sub, isError, host = document.body) {
+    if (!saveToast) return;
+    if (host && saveToast.parentElement !== host) {
+      host.appendChild(saveToast);
+    } else if (!host && saveToast.parentElement !== document.body) {
+      document.body.appendChild(saveToast);
+    }
+    saveToastTitle.textContent = title || 'Saved';
+    saveToastSub.textContent   = sub   || '';
+    const toastIcon = saveToast.querySelector('.save-toast-icon');
+    if (isError) {
+      saveToast.classList.add('save-toast--error');
+      if (toastIcon) toastIcon.textContent = '\u2715';
+    } else {
+      saveToast.classList.remove('save-toast--error');
+      if (toastIcon) toastIcon.textContent = '\u2713';
+    }
+    saveToast.classList.add('visible');
+    if (saveToastTimer) clearTimeout(saveToastTimer);
+    saveToastTimer = setTimeout(() => {
+      saveToast.classList.remove('visible');
+      saveToastTimer = null;
+    }, 10000);
+  }
+
+  function showErrorToast(title, sub, host = document.body) {
+    showSaveToast(title || 'Error', sub || '', true, host);
+  }
+
+  if (saveToastClose) {
+    saveToastClose.addEventListener('click', () => {
+      if (saveToastTimer) clearTimeout(saveToastTimer);
+      saveToast.classList.remove('visible');
+      saveToastTimer = null;
+    });
+  }
+
+  function registerLocalChangeId(changeId) {
+    const expiresAt = Date.now() + 15000;
+    recentLocalChangeIds.set(changeId, expiresAt);
+  }
+
+  function hasRecentLocalChangeId(changeId) {
+    const now = Date.now();
+    for (const [id, expiry] of recentLocalChangeIds.entries()) {
+      if (expiry <= now) recentLocalChangeIds.delete(id);
+    }
+    const expiry = recentLocalChangeIds.get(changeId);
+    return Boolean(expiry && expiry > now);
+  }
+
+  function setInputBlocked(blocked) {
+    wsInputBlocked = blocked;
+
+    if (blocked && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
+    if (blocked && dialog && dialog.open) {
+      dialog.close();
+    }
+
+    document.body.classList.toggle('ws-input-blocked', blocked);
+    if (wsBlockOverlay) {
+      wsBlockOverlay.classList.toggle('visible', blocked);
+      wsBlockOverlay.style.display = blocked ? 'flex' : 'none';
+      wsBlockOverlay.style.visibility = blocked ? 'visible' : 'hidden';
+      wsBlockOverlay.style.opacity = blocked ? '1' : '0';
+      wsBlockOverlay.setAttribute('aria-hidden', blocked ? 'false' : 'true');
+    }
+  }
+
+  function requestCommittedOverride() {
+    return new Promise(resolve => {
+      if (!overrideBlockOverlay || !overrideCancelButton || !overrideConfirmButton) {
+        resolve(window.confirm('This booking is locked because someone may be relying on it. Only alter your own locked bookings, unless you have already discussed it with the person booked or the instrument owner in charge.'));
+        return;
+      }
+
+      const cleanup = () => {
+        overrideBlockOverlay.classList.remove('visible');
+        if (overrideBlockOverlay.open) {
+          overrideBlockOverlay.close();
+        }
+        overrideBlockOverlay.setAttribute('aria-hidden', 'true');
+        overrideCancelButton.removeEventListener('click', onCancel);
+        overrideConfirmButton.removeEventListener('click', onConfirm);
+      };
+
+      const onCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+      const onConfirm = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      overrideCancelButton.addEventListener('click', onCancel);
+      overrideConfirmButton.addEventListener('click', onConfirm);
+      overrideBlockOverlay.classList.add('visible');
+      if (!overrideBlockOverlay.open) {
+        overrideBlockOverlay.showModal();
+      }
+      overrideBlockOverlay.setAttribute('aria-hidden', 'false');
+      overrideCancelButton.focus();
+    });
+  }
+
+  async function confirmCommittedEditIfNeeded(isDirty) {
+    if (dialogState.mode !== 'edit' || !dialogInitialState?.committed || !isDirty) {
+      return true;
+    }
+
+    return requestCommittedOverride();
+  }
+
+  function captureDialogState() {
+    return {
+      title: titleInput.value.trim(),
+      eventName: eventNameInput.value.trim(),
+      contact: contactInput.value.trim(),
+      start: startInput.value,
+      end: endInput.value,
+      allDay: Boolean(allDayInput.checked),
+      calendarIds: getSelectedCalendarIds().slice().sort(),
+      recurrenceEnabled: Boolean(recurEnabled.checked),
+      recurrenceFreq: recurEnabled.checked ? String(recurFreq.value || 'daily') : '',
+      recurrenceInterval: recurEnabled.checked ? String(recurInterval.value || '1') : '',
+      recurrenceUntil: recurEnabled.checked ? String(recurUntil.value || '') : '',
+      notes: notesInput.value.trim(),
+      committed: Boolean(committedInput.checked),
+    };
+  }
+
+  function dialogStateChangedSinceOpen() {
+    if (!dialogInitialState) {
+      return false;
+    }
+
+    const currentState = captureDialogState();
+    return JSON.stringify(currentState) !== JSON.stringify(dialogInitialState);
+  }
+
+  function blockInputIfNeeded(event) {
+    if (!wsInputBlocked) return;
+    if (wsBlockOverlay && wsBlockOverlay.contains(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+  }
+
+  document.addEventListener('keydown', blockInputIfNeeded, true);
+  document.addEventListener('keypress', blockInputIfNeeded, true);
+  document.addEventListener('mousedown', blockInputIfNeeded, true);
+  document.addEventListener('touchstart', blockInputIfNeeded, true);
+
+  function renderWsStatus() {
+    if (wsConnState) {
+      wsConnState.textContent = `WebSocket: ${updatesConnectionState}`;
+    }
+    if (wsIndicator) {
+      wsIndicator.classList.remove('connected', 'disconnected', 'error');
+      if (updatesConnectionState === 'connected') wsIndicator.classList.add('connected');
+      else if (updatesConnectionState === 'error') wsIndicator.classList.add('error');
+      else if (updatesConnectionState === 'disconnected') wsIndicator.classList.add('disconnected');
+    }
+
+    if (wsLastChange) {
+      if (!lastCalendarChangeAt) {
+        wsLastChange.textContent = 'Last change received: never';
+      } else {
+        wsLastChange.textContent = `Last change received: ${formatDuration(Date.now() - lastCalendarChangeAt)}`;
+      }
+    }
+
+    // Show overlay if either NiceGUI socket.io OR our calendar WS is down
+    const calConnected = updatesConnectionState === 'connected';
+    const fullyConnected = niceguiConnected && calConnected;
+    setInputBlocked(!fullyConnected);
+    if (wsBlockState) {
+      if (fullyConnected) {
+        wsBlockState.textContent = 'Connected';
+      } else if (!niceguiConnected && !calConnected) {
+        wsBlockState.textContent = 'Server connection lost — trying to reconnect…';
+      } else if (!niceguiConnected) {
+        wsBlockState.textContent = 'Server connection lost — trying to reconnect…';
+      } else {
+        wsBlockState.textContent = `Sync status: ${updatesConnectionState} — reconnecting…`;
+      }
+    }
+  }
+
+  function clearHeartbeatTimers() {
+    if (updatesHeartbeatTimer) {
+      window.clearInterval(updatesHeartbeatTimer);
+      updatesHeartbeatTimer = null;
+    }
+    if (updatesHeartbeatTimeoutTimer) {
+      window.clearTimeout(updatesHeartbeatTimeoutTimer);
+      updatesHeartbeatTimeoutTimer = null;
+    }
+  }
+
+  function startHeartbeat(socket) {
+    clearHeartbeatTimers();
+    updatesLastPongAt = Date.now();
+
+    updatesHeartbeatTimer = window.setInterval(() => {
+      if (updatesSocket !== socket || socket.readyState !== WebSocket.OPEN) {
+        clearHeartbeatTimers();
+        return;
+      }
+
+      try {
+        socket.send('ping');
+      } catch {
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      if (updatesHeartbeatTimeoutTimer) {
+        window.clearTimeout(updatesHeartbeatTimeoutTimer);
+      }
+      updatesHeartbeatTimeoutTimer = window.setTimeout(() => {
+        if (updatesSocket !== socket || socket.readyState !== WebSocket.OPEN) return;
+        const staleForMs = Date.now() - updatesLastPongAt;
+        if (staleForMs >= 9000) {
+          updatesConnectionState = 'disconnected';
+          renderWsStatus();
+          try {
+            socket.close();
+          } catch {
+            // ignore
+          }
+        }
+      }, 9000);
+    }, 4000);
+  }
+
+  window.setInterval(renderWsStatus, 1000);
+  renderWsStatus();
+
+  // ── Hook NiceGUI's socket.io to drive the offline overlay ────────────────
+  // NiceGUI exposes its socket.io socket as window.socket.  When it disconnects
+  // the framework shows a small "Trying to reconnect…" popup bottom-left; we
+  // intercept the same events to show our full-screen overlay instead.
+  // We also prevent any automatic page reloads on reconnection failures.
+  (function hookNiceGuiSocket() {
+    const sock = window.socket;
+    if (!sock) {
+      // socket.io may not be initialised yet — retry shortly
+      window.setTimeout(hookNiceGuiSocket, 150);
+      return;
+    }
+    // Avoid attaching twice if NiceGUI recreates its socket
+    if (sock.__labSchedulerHooked) return;
+    sock.__labSchedulerHooked = true;
+
+    sock.on('disconnect', () => {
+      niceguiConnected = false;
+      renderWsStatus();
+    });
+    sock.on('connect', () => {
+      niceguiConnected = true;
+      renderWsStatus();
+    });
+    // socket.io also fires 'reconnect' after the transport-level reconnection
+    sock.on('reconnect', () => {
+      niceguiConnected = true;
+      renderWsStatus();
+    });
+    // Prevent NiceGUI from reloading the page on reconnection failures.
+    // We handle reconnection gracefully with our overlay and calendar WS recovery.
+    sock.on('reconnect_failed', () => {
+      // Don't let NiceGUI's default behavior reload. We manage this via the overlay.
+    });
+    sock.on('error', () => {
+      // Same — let our overlay and WS logic handle it.
+    });
+    sock.on('reconnect_error', () => {
+      // Suppress reconnect errors that might trigger a reload.
+    });
+  })();
+  (function extractTokenFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const keys = ['link', 'links', 'token', 'tokens'];
+    for (const key of keys) {
+      for (const value of params.getAll(key)) {
+        for (const token of value.split(',')) {
+          const normalized = token.trim();
+          if (normalized) {
+            currentToken = normalized;
+            tokenAccessRequested = !isJwtToken(normalized);
+            if (tokenAccessRequested) {
+              setPreservedLinkToken(normalized);
+            }
+            setPersistedAuthToken(normalized);
+            return;
+          }
+        }
+      }
+    }
+
+    const persistedToken = getPersistedAuthToken();
+    if (persistedToken) {
+      currentToken = persistedToken;
+      tokenAccessRequested = !isJwtToken(persistedToken);
+    }
+  })();
+
+  // ── Utilities ────────────────────────────────────────────────────────────
+  function isoToLocalInput(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  }
+  function localToIso(v) { return v ? new Date(v).toISOString() : null; }
+
+  function splitEventTitle(value) {
+    const raw = String(value || '');
+    const parts = raw.split(' :: ');
+    if (parts.length < 2) {
+      return { user: raw, eventName: '' };
+    }
+    return {
+      user: parts[0].trim(),
+      eventName: parts.slice(1).join(' :: ').trim(),
+    };
+  }
+
+  function combineEventTitle(user, eventName) {
+    const normalizedUser = String(user || '').trim();
+    const normalizedEventName = String(eventName || '').trim();
+    if (!normalizedEventName) return normalizedUser;
+    if (!normalizedUser) return normalizedEventName;
+    return `${normalizedUser} :: ${normalizedEventName}`;
+  }
+
+  function startSlimeSimulation() {
+    if (slimeSimulationStarted || !landingScreen) return;
+    const canvas = document.getElementById('slime-canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    const ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return;
+
+    slimeSimulationStarted = true;
+
+    let viewportWidth = 1;
+    let viewportHeight = 1;
+    let simW = 1;
+    let simH = 1;
+    let field = new Float32Array(1);
+    let scratch = new Float32Array(1);
+    let agents = [];
+    let imageData = null;
+    let imageBytes = null;
+    let bufferCanvas = null;
+    let bufferCtx = null;
+
+    const SIM_SCALE = 0.36;
+    const SENSOR_DIST = 9;
+    const SENSOR_ANGLE = 0.58;
+    const TURN_RATE = 0.16;
+    const JITTER = 0.16;
+    const BASE_SPEED = 1.1;
+    const DEPOSIT = 2.4;
+    const DECAY = 0.035;
+
+    function wrapX(x) {
+      return x < 0 ? x + simW : (x >= simW ? x - simW : x);
+    }
+
+    function wrapY(y) {
+      return y < 0 ? y + simH : (y >= simH ? y - simH : y);
+    }
+
+    function sampleField(x, y) {
+      const ix = Math.floor(wrapX(x));
+      const iy = Math.floor(wrapY(y));
+      return field[iy * simW + ix];
+    }
+
+    function initSimulation() {
+      viewportWidth = Math.max(1, Math.floor(window.innerWidth));
+      viewportHeight = Math.max(1, Math.floor(window.innerHeight));
+      canvas.width = viewportWidth;
+      canvas.height = viewportHeight;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.imageSmoothingEnabled = true;
+
+      simW = Math.max(180, Math.floor(viewportWidth * SIM_SCALE));
+      simH = Math.max(110, Math.floor(viewportHeight * SIM_SCALE));
+
+      field = new Float32Array(simW * simH);
+      scratch = new Float32Array(simW * simH);
+      imageData = ctx.createImageData(simW, simH);
+      imageBytes = imageData.data;
+      bufferCanvas = document.createElement('canvas');
+      bufferCanvas.width = simW;
+      bufferCanvas.height = simH;
+      bufferCtx = bufferCanvas.getContext('2d', { alpha: true });
+      if (bufferCtx) bufferCtx.imageSmoothingEnabled = true;
+
+      const agentCount = Math.floor(simW * simH * 0.028);
+      agents = [];
+      for (let i = 0; i < agentCount; i += 1) {
+        agents.push({
+          x: Math.random() * simW,
+          y: Math.random() * simH,
+          angle: Math.random() * Math.PI * 2,
+          speed: BASE_SPEED + Math.random() * 0.9,
+        });
+      }
+    }
+
+    function stepAgents() {
+      for (const agent of agents) {
+        const f = sampleField(
+          agent.x + Math.cos(agent.angle) * SENSOR_DIST,
+          agent.y + Math.sin(agent.angle) * SENSOR_DIST,
+        );
+        const l = sampleField(
+          agent.x + Math.cos(agent.angle - SENSOR_ANGLE) * SENSOR_DIST,
+          agent.y + Math.sin(agent.angle - SENSOR_ANGLE) * SENSOR_DIST,
+        );
+        const r = sampleField(
+          agent.x + Math.cos(agent.angle + SENSOR_ANGLE) * SENSOR_DIST,
+          agent.y + Math.sin(agent.angle + SENSOR_ANGLE) * SENSOR_DIST,
+        );
+
+        if (f < l && f < r) {
+          agent.angle += (Math.random() < 0.5 ? -1 : 1) * TURN_RATE;
+        } else if (l > r) {
+          agent.angle -= TURN_RATE;
+        } else if (r > l) {
+          agent.angle += TURN_RATE;
+        }
+        agent.angle += (Math.random() - 0.5) * JITTER;
+
+        agent.x = wrapX(agent.x + Math.cos(agent.angle) * agent.speed);
+        agent.y = wrapY(agent.y + Math.sin(agent.angle) * agent.speed);
+
+        const idx = Math.floor(agent.y) * simW + Math.floor(agent.x);
+        field[idx] = Math.min(14, field[idx] + DEPOSIT);
+      }
+    }
+
+    function diffuseAndDecay() {
+      for (let y = 1; y < simH - 1; y += 1) {
+        const row = y * simW;
+        for (let x = 1; x < simW - 1; x += 1) {
+          const idx = row + x;
+          const val = (
+            field[idx] * 0.25 +
+            field[idx - 1] * 0.14 +
+            field[idx + 1] * 0.14 +
+            field[idx - simW] * 0.14 +
+            field[idx + simW] * 0.14 +
+            field[idx - simW - 1] * 0.047 +
+            field[idx - simW + 1] * 0.047 +
+            field[idx + simW - 1] * 0.047 +
+            field[idx + simW + 1] * 0.047
+          );
+          scratch[idx] = Math.max(0, val - DECAY);
+        }
+      }
+
+      const tmp = field;
+      field = scratch;
+      scratch = tmp;
+    }
+
+    function renderField() {
+      for (let i = 0; i < field.length; i += 1) {
+        const lum = Math.min(255, field[i] * 32);
+        const px = i * 4;
+        imageBytes[px] = 5 + lum * 0.08;
+        imageBytes[px + 1] = 28 + lum * 0.7;
+        imageBytes[px + 2] = 24 + lum * 0.55;
+        imageBytes[px + 3] = Math.min(255, lum * 1.22);
+      }
+      if (!bufferCtx || !bufferCanvas) return;
+      bufferCtx.putImageData(imageData, 0, 0);
+      ctx.fillStyle = 'rgba(4, 47, 46, 0.18)';
+      ctx.clearRect(0, 0, viewportWidth, viewportHeight);
+      ctx.fillRect(0, 0, viewportWidth, viewportHeight);
+      ctx.drawImage(bufferCanvas, 0, 0, simW, simH, 0, 0, viewportWidth, viewportHeight);
+    }
+
+    function animate() {
+      if (landingScreen.style.display !== 'none') {
+        stepAgents();
+        diffuseAndDecay();
+        renderField();
+      }
+      requestAnimationFrame(animate);
+    }
+
+    initSimulation();
+    window.addEventListener('resize', initSimulation);
+    requestAnimationFrame(animate);
+  }
+
+  const API_WARN_MS = 1500;
+  const API_TIMEOUT_MS = 12000;
+
+  async function request(path, method = 'GET', body = null, includeToken = true) {
+    // Include token as query parameter if available.
+    // Fall back to the URL if currentToken is not yet set in memory.
+    let token = null;
+    let preservedToken = null;
+    if (includeToken) {
+      token = currentToken;
+      if (!token) {
+        const _p = new URLSearchParams(window.location.search);
+        token = _p.get('token') || _p.get('link') || null;
+      }
+      preservedToken = getPreservedLinkToken();
+    }
+    const buildFullPath = (candidateToken) => {
+      const separator = path.includes('?') ? '&' : '?';
+      return candidateToken ? `${path}${separator}token=${encodeURIComponent(candidateToken)}` : path;
+    };
+    const fullPath = buildFullPath(token);
+    
+    const changeId = newChangeId();
+    const opts = {
+      method,
+      credentials: 'include',
+      headers: {
+        ...JSON_HDR,
+        'X-Client-Id': CLIENT_INSTANCE_ID,
+        'X-Change-Id': changeId,
+      },
+    };
+    if (body !== null) opts.body = JSON.stringify(body);
+    if (method !== 'GET') {
+      registerLocalChangeId(changeId);
+    }
+
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    opts.signal = controller.signal;
+
+    let res;
+    try {
+      res = await fetch(fullPath, opts);
+    } catch (error) {
+      const elapsed = Math.round(performance.now() - startedAt);
+      if (error && error.name === 'AbortError') {
+        console.error(`[API timeout] ${method} ${fullPath} exceeded ${API_TIMEOUT_MS}ms`);
+        throw new Error('Request timed out. Please retry.');
+      }
+      console.error(`[API network error] ${method} ${fullPath} after ${elapsed}ms`, error);
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+
+    const elapsed = Math.round(performance.now() - startedAt);
+    if (elapsed >= API_WARN_MS) {
+      console.warn(`[API slow] ${method} ${fullPath} took ${elapsed}ms`);
+    }
+
+    if (!res.ok) {
+      const p = await res.json().catch(() => ({ detail: 'Request failed' }));
+      const detail = String(p.detail || 'Request failed');
+      const shouldRetryWithPreservedToken = includeToken
+        && preservedToken
+        && preservedToken !== token
+        && detail.includes('Token does not permit access to this calendar.');
+      if (shouldRetryWithPreservedToken) {
+        const retryPath = buildFullPath(preservedToken);
+        res = await fetch(retryPath, opts);
+        if (!res.ok) {
+          const retryPayload = await res.json().catch(() => ({ detail: 'Request failed' }));
+          throw new Error(retryPayload.detail || 'Request failed');
+        }
+        return res.status === 204 ? null : res.json();
+      }
+      throw new Error(detail);
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  async function refreshFromRemoteUpdate() {
+    if (!hasValidToken) return;
+    if (updatesRefreshInFlight) {
+      updatesRefreshQueued = true;
+      return;
+    }
+
+    updatesRefreshInFlight = true;
+    try {
+      const [cals, accessCatalog] = await Promise.all([
+        request('/api/calendars'),
+        request('/api/access/catalog'),
+      ]);
+      allCalendars = cals;
+      accessCatalogData = accessCatalog;
+      tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
+      renderSidebar();
+      renderAccessCatalog();
+      if (fcCalendar) {
+        fcCalendar.refetchEvents();
+      }
+    } catch (err) {
+      console.warn('Remote calendar refresh failed:', err);
+    } finally {
+      updatesRefreshInFlight = false;
+      if (updatesRefreshQueued) {
+        updatesRefreshQueued = false;
+        refreshFromRemoteUpdate();
+      }
+    }
+  }
+
+  function connectCalendarUpdatesSocket() {
+    if (updatesSocket && (
+      updatesSocket.readyState === WebSocket.OPEN ||
+      updatesSocket.readyState === WebSocket.CONNECTING
+    )) {
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = currentToken
+      ? `${protocol}//${window.location.host}/ws/calendar-updates?token=${encodeURIComponent(currentToken)}`
+      : `${protocol}//${window.location.host}/ws/calendar-updates`;
+    const socket = new WebSocket(wsUrl);
+    updatesSocket = socket;
+    updatesConnectionState = 'connecting';
+    renderWsStatus();
+
+    socket.onopen = () => {
+      updatesReconnectDelay = 500;
+      updatesConnectionState = 'connected';
+      renderWsStatus();
+      startHeartbeat(socket);
+      if (updatesReconnectTimer) {
+        window.clearTimeout(updatesReconnectTimer);
+        updatesReconnectTimer = null;
+      }
+    };
+
+    socket.onmessage = event => {
+      if (event.data === 'pong') {
+        updatesLastPongAt = Date.now();
+        return;
+      }
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        if (payload.type === 'calendar_changed') {
+          lastCalendarChangeAt = Date.now();
+          renderWsStatus();
+          if (payload.sourceChangeId && hasRecentLocalChangeId(payload.sourceChangeId)) {
+            return;
+          }
+          refreshFromRemoteUpdate();
+        } else if (payload.type === 'user_resources_updated') {
+          // User's resources (calendar_ids) were updated on admin page - refresh the visible range
+          console.log('User resources updated, refreshing calendar view');
+          refreshFromRemoteUpdate();
+        }
+      } catch (err) {
+        console.warn('Invalid websocket payload:', err);
+      }
+    };
+
+    socket.onclose = () => {
+      clearHeartbeatTimers();
+      if (updatesSocket === socket) updatesSocket = null;
+      updatesConnectionState = 'disconnected';
+      renderWsStatus();
+      if (updatesReconnectTimer) return;
+      const delay = updatesReconnectDelay;
+      updatesReconnectDelay = Math.min(5000, updatesReconnectDelay * 2);
+      updatesReconnectTimer = window.setTimeout(() => {
+        updatesReconnectTimer = null;
+        connectCalendarUpdatesSocket();
+      }, delay);
+    };
+
+    socket.onerror = () => {
+      clearHeartbeatTimers();
+      updatesConnectionState = 'error';
+      renderWsStatus();
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+    };
+  }
+
+  async function validateTokenAndLoadCalendars(token) {
+    const validation = await request(
+      '/api/token/validate/' + encodeURIComponent(token),
+      'GET',
+      null,
+      false,
+    );
+    if (!validation.valid) {
+      throw new Error('Invalid or expired token.');
+    }
+
+    const apiToken = validation.apiToken || token;
+
+    // Pass token explicitly for bootstrap/login flows so calendar loading does
+    // not depend on in-memory state timing.
+    const calendars = await request(
+      '/api/calendars?token=' + encodeURIComponent(apiToken),
+      'GET',
+      null,
+      false,
+    );
+    const session = await request(
+      '/api/session/user?token=' + encodeURIComponent(apiToken),
+      'GET',
+      null,
+      false,
+    );
+    return { validation, calendars, session, apiToken };
+  }
+
+  async function claimTokenResourcesForLoggedInUser(token, calendarIds = null) {
+    if (!token) return;
+    try {
+      const payloadCalendarIds = Array.isArray(calendarIds)
+        ? calendarIds
+        : (() => {
+            const pendingCalendarIds = localStorage.getItem('pendingCalendarIdsToClaim');
+            if (!pendingCalendarIds) return [];
+            try {
+              const parsedCalendarIds = JSON.parse(pendingCalendarIds);
+              return Array.isArray(parsedCalendarIds) ? parsedCalendarIds : [];
+            } catch (error) {
+              console.warn('Failed to parse pending calendar claim payload:', error);
+              return [];
+            }
+          })();
+      const payload = payloadCalendarIds.length > 0
+        ? { calendarIds: payloadCalendarIds }
+        : null;
+      const result = await request(
+        `/api/tokens/claim-url-token/${encodeURIComponent(token)}`,
+        'POST',
+        payload,
+        false,
+      );
+      if (result && result.claimed) {
+        console.log('Token resources claimed for user:', result.calendarIds);
+        localStorage.removeItem('pendingCalendarIdsToClaim');
+      }
+      return result;
+    } catch (error) {
+      console.warn('Failed to claim token resources for user:', error);
+      return null;
+    }
+  }
+
+  function syncUserIdInUrl(user) {
+    const url = new URL(window.location.href);
+    if (user && user.id) {
+      url.searchParams.set('user_id', user.id);
+    } else {
+      url.searchParams.delete('user_id');
+    }
+    history.replaceState({}, '', url.toString());
+  }
+
+  function calendarNamesFromIds(calendarIds) {
+    const names = (calendarIds || [])
+      .map(id => allCalendars.find(c => c.id === id)?.name)
+      .filter(Boolean);
+    return names.length > 0 ? names.join(', ') : 'this calendar';
+  }
+
+  function showOverlapPopupIfNeeded(message, calendarIds = []) {
+    const detail = String(message || '').trim();
+    if (detail && /(overlap|clash|conflict)/i.test(detail)) {
+      const calendarName = calendarNamesFromIds(calendarIds);
+      overlapTitle.textContent = `Scheduling Conflict: ${calendarName}`;
+      overlapMessage.textContent = detail;
+      overlapDialog.showModal();
+      overlapOkButton.focus();
+      return true;
+    }
+    return false;
+  }
+
+  function compareCalendarPickerItems(left, right) {
+    const leftHidden = hiddenCals.has(left.id);
+    const rightHidden = hiddenCals.has(right.id);
+    if (leftHidden !== rightHidden) {
+      return leftHidden ? 1 : -1;
+    }
+
+    const leftGroup = String(left.group || 'General');
+    const rightGroup = String(right.group || 'General');
+    const groupCompare = leftGroup.localeCompare(rightGroup);
+    if (groupCompare !== 0) {
+      return groupCompare;
+    }
+
+    return String(left.name || '').localeCompare(String(right.name || ''));
+  }
+
+  function getDialogSelectionRange() {
+    const startValue = String(startInput.value || '').trim();
+    if (!startValue) {
+      return null;
+    }
+
+    const start = new Date(startValue);
+    if (Number.isNaN(start.getTime())) {
+      return null;
+    }
+
+    const endValue = String(endInput.value || '').trim();
+    const end = endValue ? new Date(endValue) : new Date(start);
+    if (Number.isNaN(end.getTime())) {
+      return null;
+    }
+
+    return { start, end };
+  }
+
+  function getEventCalendarIds(eventInstance) {
+    const directIds = Array.isArray(eventInstance?.calendarIds) ? eventInstance.calendarIds : [];
+    if (directIds.length > 0) {
+      return directIds;
+    }
+
+    const extendedIds = Array.isArray(eventInstance?.extendedProps?.calendarIds)
+      ? eventInstance.extendedProps.calendarIds
+      : [];
+    if (extendedIds.length > 0) {
+      return extendedIds;
+    }
+
+    return eventInstance?.calendarId ? [eventInstance.calendarId] : [];
+  }
+
+  function getEventNameForSuggestion(eventInstance) {
+    const directName = String(eventInstance?.eventTitle || '').trim();
+    if (directName) {
+      return directName;
+    }
+
+    const fallbackTitle = String(eventInstance?.title || '').trim();
+    if (!fallbackTitle) {
+      return '';
+    }
+
+    const parts = fallbackTitle.split(' :: ');
+    if (parts.length > 1) {
+      return parts.slice(1).join(' :: ').trim();
+    }
+
+    return fallbackTitle;
+  }
+
+  function updateEventNameSuggestions(events = (dialogSuggestionEvents.length > 0 ? dialogSuggestionEvents : dialogLoadedEvents)) {
+    if (!eventNameOptions) {
+      return;
+    }
+
+    const selectedCalendarIds = new Set(getSelectedCalendarIds());
+    const suggestions = new Set();
+    const sourceEvents = Array.isArray(events) ? events : [];
+
+    for (const eventInstance of sourceEvents) {
+      const calendarIds = getEventCalendarIds(eventInstance);
+      if (selectedCalendarIds.size > 0 && !calendarIds.some(calendarId => selectedCalendarIds.has(calendarId))) {
+        continue;
+      }
+
+      const suggestion = getEventNameForSuggestion(eventInstance);
+      if (suggestion) {
+        suggestions.add(suggestion);
+      }
+    }
+
+    eventNameOptions.innerHTML = '';
+    for (const suggestion of Array.from(suggestions).sort((left, right) => left.localeCompare(right))) {
+      const option = document.createElement('option');
+      option.value = suggestion;
+      eventNameOptions.appendChild(option);
+    }
+  }
+
+  async function refreshDialogEventNameSuggestions() {
+    if (!dialog.open) {
+      return;
+    }
+
+    const requestId = ++dialogSuggestionRequestId;
+    try {
+      const query = new URLSearchParams({
+        start: '1970-01-01T00:00:00Z',
+        end: '2100-01-01T00:00:00Z',
+      });
+      const events = await request('/api/events?' + query.toString());
+      if (requestId !== dialogSuggestionRequestId || !dialog.open) {
+        return;
+      }
+      dialogSuggestionEvents = Array.isArray(events) ? events : [];
+      updateEventNameSuggestions(dialogSuggestionEvents);
+    } catch (error) {
+      if (requestId === dialogSuggestionRequestId) {
+        console.warn('Failed to refresh event name suggestions:', error);
+      }
+    }
+  }
+
+  function scheduleDialogEventNameSuggestionsRefresh() {
+    if (dialogSuggestionRefreshTimer) {
+      window.clearTimeout(dialogSuggestionRefreshTimer);
+    }
+    dialogSuggestionRefreshTimer = window.setTimeout(() => {
+      dialogSuggestionRefreshTimer = null;
+      void refreshDialogEventNameSuggestions();
+    }, 120);
+  }
+
+  function eventInstanceBookedForDialog(eventInstance, calendarId, rangeStart, rangeEnd) {
+    const seriesId = eventInstance?.extendedProps?.seriesId || eventInstance?.id || '';
+    if (dialogState.mode === 'edit' && dialogState.eventId && seriesId === dialogState.eventId) {
+      return false;
+    }
+
+    const calendarIds = getEventCalendarIds(eventInstance);
+    if (!calendarIds.includes(calendarId)) {
+      return false;
+    }
+
+    const startValue = eventInstance?.start;
+    if (!startValue) {
+      return false;
+    }
+    const eventStart = new Date(startValue);
+    if (Number.isNaN(eventStart.getTime())) {
+      return false;
+    }
+
+    const endValue = eventInstance?.end || startValue;
+    const eventEnd = new Date(endValue);
+    if (Number.isNaN(eventEnd.getTime())) {
+      return false;
+    }
+
+    return eventStart < rangeEnd && rangeStart < eventEnd;
+  }
+
+  function updateDialogCalendarAvailability(events = dialogLoadedEvents) {
+    if (!dialog.open) {
+      return;
+    }
+
+    const range = getDialogSelectionRange();
+    const sourceEvents = Array.isArray(events) ? events : [];
+    const buttons = eventCalendars.querySelectorAll('.event-calendar-info[data-calendar-id]');
+    for (const button of buttons) {
+      const calendarId = button.getAttribute('data-calendar-id') || '';
+      const calendarName = button.getAttribute('data-calendar-name') || 'this calendar';
+      const booked = Boolean(range)
+        && sourceEvents.some(eventInstance => eventInstanceBookedForDialog(eventInstance, calendarId, range.start, range.end));
+      button.classList.toggle('event-calendar-info--booked', booked);
+      button.title = booked
+        ? 'Booked during the selected time. Open calendar information.'
+        : 'Open calendar information';
+      button.setAttribute(
+        'aria-label',
+        booked
+          ? `Open information for ${calendarName}. Booked during the selected time.`
+          : `Open information for ${calendarName}`,
+      );
+    }
+    syncCalendarHoverTooltipState();
+    updateEventNameSuggestions();
+  }
+
+  async function refreshDialogCalendarAvailability() {
+    if (!dialog.open) {
+      return;
+    }
+
+    const range = getDialogSelectionRange();
+    if (!range) {
+      dialogLoadedEvents = [];
+      updateDialogCalendarAvailability([]);
+      return;
+    }
+
+    const requestId = ++dialogAvailabilityRequestId;
+    try {
+      const query = new URLSearchParams({
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+      });
+      const events = await request('/api/events?' + query.toString());
+      if (requestId !== dialogAvailabilityRequestId || !dialog.open) {
+        return;
+      }
+      dialogLoadedEvents = Array.isArray(events) ? events : [];
+      updateDialogCalendarAvailability(dialogLoadedEvents);
+    } catch (error) {
+      if (requestId === dialogAvailabilityRequestId) {
+        console.warn('Failed to refresh dialog availability:', error);
+      }
+    }
+  }
+
+  function scheduleDialogCalendarAvailabilityRefresh() {
+    if (dialogAvailabilityRefreshTimer) {
+      window.clearTimeout(dialogAvailabilityRefreshTimer);
+    }
+    dialogAvailabilityRefreshTimer = window.setTimeout(() => {
+      dialogAvailabilityRefreshTimer = null;
+      void refreshDialogCalendarAvailability();
+    }, 120);
+  }
+
+  function renderCalendarCheckboxes(selectedIds) {
+    const selectedSet = new Set(selectedIds || []);
+    eventCalendars.innerHTML = '';
+    // If token is set, only show token-accessible calendars
+    const visibleCalendars = tokenAllowedCalendars 
+      ? allCalendars.filter(cal => tokenAllowedCalendars.has(cal.id))
+      : allCalendars;
+    const orderedCalendars = [...visibleCalendars].sort(compareCalendarPickerItems);
+    
+    for (const [groupName, calendars] of groupCalendars(orderedCalendars)) {
+      const groupHeader = document.createElement('div');
+      groupHeader.className = 'sidebar-section-title';
+      groupHeader.textContent = groupName;
+      eventCalendars.appendChild(groupHeader);
+
+      for (const cal of calendars) {
+        const item = document.createElement('div');
+        item.className = 'event-calendar-item';
+        if (hiddenCals.has(cal.id)) {
+          item.classList.add('event-calendar-item--hidden');
+        }
+
+        const toggle = document.createElement('label');
+        toggle.className = 'event-calendar-toggle';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = cal.id;
+        checkbox.checked = selectedSet.has(cal.id);
+        checkbox.addEventListener('change', () => {
+            scheduleDialogEventNameSuggestionsRefresh();
+            updateEventNameSuggestions();
+        });
+
+        const dot = document.createElement('span');
+        dot.className = 'event-calendar-dot';
+        dot.style.background = cal.color;
+
+        const name = document.createElement('span');
+        name.className = 'event-calendar-label';
+        name.textContent = cal.name;
+
+        toggle.append(checkbox, dot, name);
+
+        const infoButton = document.createElement('button');
+        infoButton.type = 'button';
+        infoButton.className = 'event-calendar-info';
+        infoButton.dataset.calendarId = cal.id;
+        infoButton.dataset.calendarName = cal.name;
+        infoButton.textContent = 'i';
+        bindCalendarHoverTooltip(infoButton, cal);
+        infoButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          window.location.href = `/calendar-info/${encodeURIComponent(cal.id)}`;
+        });
+
+        item.append(toggle, infoButton);
+        eventCalendars.appendChild(item);
+      }
+    }
+
+    updateDialogCalendarAvailability();
+  }
+
+  function getSelectedCalendarIds() {
+    return Array.from(eventCalendars.querySelectorAll('input[type="checkbox"]'))
+      .filter(checkbox => checkbox.checked)
+      .map(checkbox => checkbox.value);
+  }
+
+  function groupCalendars(calendars) {
+    const grouped = new Map();
+    for (const cal of calendars) {
+      const groupName = cal.group || 'General';
+      if (!grouped.has(groupName)) grouped.set(groupName, []);
+      grouped.get(groupName).push(cal);
+    }
+    return Array.from(grouped.entries());
+  }
+
+  function calendarThumbnailUrl(calendar) {
+    const thumbUrl = calendar?.imageThumbUrl || '';
+    if (thumbUrl) return thumbUrl;
+    const imageUrl = calendar?.imageUrl || '';
+    if (imageUrl.startsWith('data:')) return imageUrl;
+    return calendar?.imageFallbackUrl || imageUrl || '';
+  }
+
+  function positionCalendarHoverTooltip(event) {
+    const tooltipWidth = calendarHoverTooltip.offsetWidth || 320;
+    const tooltipHeight = calendarHoverTooltip.offsetHeight || 240;
+    const nextX = event.clientX + 16;
+    const nextY = event.clientY + 16;
+    const maxX = window.innerWidth - tooltipWidth - 8;
+    const maxY = window.innerHeight - tooltipHeight - 8;
+    calendarHoverTooltip.style.left = `${Math.max(8, Math.min(nextX, maxX))}px`;
+    calendarHoverTooltip.style.top = `${Math.max(8, Math.min(nextY, maxY))}px`;
+  }
+
+  function showCalendarHoverTooltip(calendar, event, host = document.body) {
+    const thumbUrl = calendarThumbnailUrl(calendar);
+    if (!thumbUrl) return;
+    if (calendarHoverTooltip.parentElement !== host) {
+      host.appendChild(calendarHoverTooltip);
+    }
+    calendarHoverTooltip.replaceChildren();
+    const image = document.createElement('img');
+    image.src = thumbUrl;
+    image.alt = `${calendar.name} thumbnail`;
+    const copy = document.createElement('div');
+    copy.className = 'calendar-hover-copy';
+    const title = document.createElement('div');
+    title.className = 'calendar-hover-title';
+    title.textContent = calendar.name;
+    const subtitle = document.createElement('div');
+    subtitle.className = 'calendar-hover-subtitle';
+    subtitle.textContent = String(calendar.blurb || `${calendar.name} belongs to the ${calendar.group || 'General'} group and is available from the main schedule.`).trim();
+    copy.append(title, subtitle);
+    calendarHoverTooltip.append(image, copy);
+    calendarHoverTooltip.style.display = 'block';
+    positionCalendarHoverTooltip(event);
+    syncCalendarHoverTooltipState();
+  }
+
+  function bindCalendarHoverTooltip(button, calendar) {
+    button.addEventListener('mouseenter', (event) => {
+      activeCalendarHoverButton = button;
+      const host = button.closest('dialog') || document.body;
+      showCalendarHoverTooltip(calendar, event, host);
+    });
+    button.addEventListener('mousemove', (event) => {
+      if (calendarHoverTooltip.style.display === 'block') {
+        positionCalendarHoverTooltip(event);
+      }
+    });
+    button.addEventListener('mouseleave', () => {
+      if (activeCalendarHoverButton === button) {
+        activeCalendarHoverButton = null;
+      }
+      hideCalendarHoverTooltip();
+    });
+  }
+
+  function hideCalendarHoverTooltip() {
+    calendarHoverTooltip.style.display = 'none';
+    calendarHoverTooltip.replaceChildren();
+    calendarHoverTooltip.classList.remove('calendar-hover-tooltip--booked');
+  }
+
+  function syncCalendarHoverTooltipState() {
+    const booked = Boolean(
+      activeCalendarHoverButton && activeCalendarHoverButton.classList.contains('event-calendar-info--booked')
+    );
+    calendarHoverTooltip.classList.toggle('calendar-hover-tooltip--booked', booked);
+  }
+
+  function getAdminEditorToken() {
+    return currentToken || authenticatedSessionToken || getPersistedAuthToken() || '';
+  }
+
+  function isAdminUser() {
+    return Boolean(currentUser && currentUser.role === 'admin');
+  }
+
+  async function logoutUser() {
+    try {
+      // Delete the user's link token from the database
+      const urlParams = new URLSearchParams(window.location.search);
+      const userIdForLogout = (currentUser && currentUser.id) || urlParams.get('user_id');
+      if (currentToken && userIdForLogout) {
+        await request(
+          '/api/logout',
+          'POST',
+          { user_id: userIdForLogout }
+        ).catch(error => {
+          console.error('Failed to delete token:', error);
+          // Still redirect to clear the session
+        });
+      }
+      clearPersistedAuthToken();
+      clearPreservedLinkToken();
+      // Clear URL and redirect to home to reset the app
+      window.location.href = '/';
+    } catch (error) {
+      console.error('Logout failed:', error);
+      clearPersistedAuthToken();
+      clearPreservedLinkToken();
+      // Still redirect to clear the session
+      window.location.href = '/';
+    }
+  }
+
+  function isTokenOnlyPage() {
+    return tokenAccessRequested || Boolean(currentUser && currentUser.isTokenOnlyAccount);
+  }
+
+  function getTokenPageCalendarIdsToClaim() {
+    const selectedCalendarIds = getSelectedCalendarIds();
+    if (selectedCalendarIds.length > 0) {
+      return selectedCalendarIds;
+    }
+    if (tokenAllowedCalendars && tokenAllowedCalendars.size > 0) {
+      return Array.from(tokenAllowedCalendars);
+    }
+    return [];
+  }
+
+  async function getSessionUser() {
+    const response = await fetch('/api/auth/check-session', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) return null;
+    const sessionData = await response.json();
+    authenticatedSessionToken = sessionData && sessionData.authenticated
+      ? (sessionData.apiToken || sessionData.token)
+      : null;
+    return sessionData && sessionData.authenticated ? sessionData : null;
+  }
+
+  function redirectToUserOnlyUrl(user) {
+    if (!user || !user.id) return;
+    const url = new URL(window.location.origin + '/');
+    url.searchParams.set('user_id', user.id);
+    window.location.replace(url.toString());
+  }
+
+  async function handleTokenPageAction() {
+    const calendarIdsToClaim = getTokenPageCalendarIdsToClaim();
+    const sessionUser = currentUser && currentUser.id ? currentUser : null;
+    const hasAuthenticatedSession = Boolean(sessionUser && authenticatedSessionToken);
+    const sessionData = hasAuthenticatedSession ? { user: sessionUser, token: authenticatedSessionToken } : await getSessionUser();
+
+    if (sessionData && sessionData.user && sessionData.token) {
+      // Session exists - save the current calendar selection to the account.
+      try {
+        currentUser = sessionData.user;
+        syncUserIdInUrl(currentUser);
+        if (calendarIdsToClaim.length > 0) {
+          localStorage.setItem('pendingCalendarIdsToClaim', JSON.stringify(calendarIdsToClaim));
+        } else {
+          localStorage.removeItem('pendingCalendarIdsToClaim');
+        }
+        const claimResult = await claimTokenResourcesForLoggedInUser(currentToken, calendarIdsToClaim);
+        clearPersistedAuthToken();
+        localStorage.removeItem('pendingTokenToClaim');
+        localStorage.removeItem('pendingCalendarIdsToClaim');
+        redirectToUserOnlyUrl({ id: claimResult?.userId || currentUser.id });
+        showSaveToast('Calendar updated', 'Calendar added to your account');
+      } catch (error) {
+        showErrorToast('Save failed', error.message);
+      }
+    } else {
+      if (calendarIdsToClaim.length > 0) {
+        localStorage.setItem('pendingCalendarIdsToClaim', JSON.stringify(calendarIdsToClaim));
+      } else {
+        localStorage.removeItem('pendingCalendarIdsToClaim');
+      }
+      // No session token - redirect to login
+      window.location.href = '/auth/google-login';
+    }
+  }
+
+  async function loadSessionUser(token = currentToken) {
+    if (!token) {
+      currentUser = null;
+      syncUserIdInUrl(null);
+      return null;
+    }
+    const session = await request('/api/session/user', 'GET', null, false);
+    currentUser = session && session.authenticated ? session.user : null;
+    syncUserIdInUrl(currentUser);
+    return currentUser;
+  }
+
+  function setCurrentView(view) {
+    currentView = view;
+    const showCalendar = view === 'calendar';
+    const showAccess = view === 'access';
+    const showAdmin = view === 'admin' && isAdminUser();
+    calendarView.hidden = !showCalendar;
+    if (accessPanel) {
+      accessPanel.hidden = !showAccess;
+    }
+    adminPanel.hidden = !showAdmin;
+    if (showAccess && !accessCatalogData) {
+      void loadAccessCatalog();
+    }
+    if (adminNavItem) {
+      adminNavItem.classList.toggle('active', showAdmin);
+    }
+    if (accessNavItem) {
+      accessNavItem.classList.toggle('active', showAccess);
+    }
+  }
+
+  function accessButtonLabelForState(state) {
+    if (state === 'granted' || state === 'approved') return 'Approved';
+    if (state === 'pending' || state === 'requested' || state === 'group-pending') return 'Requested';
+    return 'Request access';
+  }
+
+  async function requestAccess(targetType, targetId, label) {
+    try {
+      await request('/api/access-requests', 'POST', { targetType, targetId });
+      showSaveToast('Access requested', `Requested access to ${label}.`);
+      await loadAccessCatalog();
+    } catch (error) {
+      showErrorToast('Request failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+    }
+  }
+
+  async function withdrawAccessRequest(requestId, label) {
+    try {
+      await request(`/api/access-requests/${requestId}`, 'DELETE');
+      showSaveToast('Request withdrawn', `Withdrew access request for ${label}.`);
+      await loadAccessCatalog();
+    } catch (error) {
+      showErrorToast('Withdraw failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+    }
+  }
+
+  async function toggleAccessVisibility(requestId, label) {
+    try {
+      await request(`/api/access-requests/${requestId}/toggle-visibility`, 'POST');
+      showSaveToast('Access updated', `Updated access for ${label}.`);
+      await loadAccessCatalog();
+    } catch (error) {
+      showErrorToast('Update failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+    }
+  }
+
+  async function toggleAccessVisibilityForTarget(targetType, targetId, label) {
+    try {
+      await request('/api/access-requests/toggle-visibility', 'POST', { targetType, targetId });
+      showSaveToast('Access updated', `Updated access for ${label}.`);
+      await loadAccessCatalog();
+    } catch (error) {
+      showErrorToast('Update failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+    }
+  }
+
+  function renderAccessCatalog() {
+    if (!accessCatalogGrid) {
+      return;
+    }
+
+    accessCatalogGrid.innerHTML = '';
+    const groups = Array.isArray(accessCatalogData?.groups) ? accessCatalogData.groups : [];
+    if (groups.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.className = 'admin-helper';
+      emptyState.textContent = 'No calendars are available yet.';
+      accessCatalogGrid.appendChild(emptyState);
+      return;
+    }
+
+    for (const group of groups) {
+      const groupCard = document.createElement('section');
+      groupCard.className = 'access-group-card';
+
+      const groupHead = document.createElement('div');
+      groupHead.className = 'access-group-head';
+
+      const groupText = document.createElement('div');
+      const groupTitle = document.createElement('div');
+      groupTitle.className = 'access-group-title';
+      groupTitle.textContent = group.name;
+      const groupSubtitle = document.createElement('div');
+      groupSubtitle.className = 'access-group-subtitle';
+      const groupCount = Array.isArray(group.calendars) ? group.calendars.length : 0;
+      groupSubtitle.textContent = `${groupCount} calendar${groupCount === 1 ? '' : 's'}`;
+      groupText.append(groupTitle, groupSubtitle);
+
+      const groupButton = document.createElement('button');
+      groupButton.type = 'button';
+      groupButton.className = 'access-pill-button access-group-request';
+      const groupState = group.requestState || 'available';
+      groupButton.dataset.state = groupState;
+      groupButton.textContent = groupState === 'available'
+        ? 'Request Group Access'
+        : groupState === 'granted' || groupState === 'approved'
+          ? 'Hide Group'
+          : groupState === 'hidden'
+            ? 'Show Group'
+            : accessButtonLabelForState(groupState);
+      if (groupState === 'available') {
+        groupButton.onclick = () => requestAccess('group', group.name, `the ${group.name} group`);
+      } else if (groupState === 'pending' || groupState === 'requested' || groupState === 'group-pending') {
+        groupButton.onclick = () => withdrawAccessRequest(group.requestId, `the ${group.name} group`);
+      } else {
+        groupButton.onclick = () => toggleAccessVisibilityForTarget('group', group.name, `the ${group.name} group`);
+      }
+
+      groupHead.append(groupText, groupButton);
+
+      const calendarList = document.createElement('div');
+      calendarList.className = 'access-group-assets';
+      for (const calendar of (group.calendars || [])) {
+        const calendarState = calendar.requestState || 'available';
+        const calendarButton = document.createElement('button');
+        calendarButton.type = 'button';
+        calendarButton.className = 'access-pill-button access-asset-pill';
+        calendarButton.dataset.state = calendarState;
+        calendarButton.textContent = calendar.name;
+        calendarButton.title = calendarState === 'granted' || calendarState === 'approved'
+          ? `Hide access to ${calendar.name}`
+          : calendarState === 'hidden'
+            ? `Show access to ${calendar.name}`
+            : calendarState === 'pending' || calendarState === 'requested' || calendarState === 'group-pending'
+              ? `Withdraw the request for ${calendar.name}`
+              : `Request access to ${calendar.name}`;
+        if (calendarState === 'available') {
+          calendarButton.onclick = () => requestAccess('calendar', calendar.id, calendar.name);
+        } else if (calendarState === 'pending' || calendarState === 'requested' || calendarState === 'group-pending') {
+          calendarButton.onclick = () => withdrawAccessRequest(calendar.requestId, calendar.name);
+        } else if (calendarState === 'granted' || calendarState === 'approved' || calendarState === 'hidden') {
+          calendarButton.onclick = () => toggleAccessVisibilityForTarget('calendar', calendar.id, calendar.name);
+        }
+
+        calendarList.appendChild(calendarButton);
+      }
+
+      groupCard.append(groupHead, calendarList);
+      accessCatalogGrid.appendChild(groupCard);
+    }
+  }
+
+  async function loadAccessCatalog() {
+    if (!hasValidToken && !currentToken) {
+      accessCatalogData = null;
+      renderAccessCatalog();
+      return;
+    }
+
+    try {
+      accessCatalogData = await request('/api/access/catalog');
+    } catch (error) {
+      accessCatalogData = { groups: [] };
+      console.warn('Failed to load access catalog:', error);
+    }
+    renderAccessCatalog();
+  }
+
+  function resourceName(resourceId) {
+    const resources = adminUsersData?.resources || [];
+    return resources.find(resource => resource.id === resourceId)?.name || resourceId;
+  }
+
+  function assignedGroupsForCalendarIds(calendarIds, resourceGroups) {
+    const selected = new Set(calendarIds || []);
+    const groups = [];
+    for (const [groupName, ids] of Object.entries(resourceGroups || {})) {
+      const assignedIds = ids.filter(id => selected.has(id));
+      if (assignedIds.length > 0) {
+        groups.push({ groupName, assignedIds });
+      }
+    }
+    return groups;
+  }
+  async function saveAdminUserResources(userId, calendarIds, groupNames = []) {
+    await request(`/api/admin/users/${encodeURIComponent(userId)}/resources`, 'PUT', { calendarIds, groupNames });
+    showSaveToast('Access updated', 'User calendar and group access updated.');
+  }
+
+  async function createAdminUser(name, email, calendarIds, groupNames = []) {
+    return request('/api/admin/users', 'POST', {
+      name,
+      email: email || null,
+      calendarIds,
+      groupNames,
+    });
+  }
+
+  async function createAdminGroup(name) {
+    return request('/api/admin/groups', 'POST', { name });
+  }
+
+  async function createAdminResourceForGroup(name, groupName) {
+    return request(`/api/admin/groups/${encodeURIComponent(groupName)}/resources`, 'POST', { name });
+  }
+
+  async function renameAdminGroup(groupName, newName) {
+    return request(`/api/admin/groups/${encodeURIComponent(groupName)}`, 'PUT', { name: newName });
+  }
+
+  async function deleteAdminGroup(groupName) {
+    return request(`/api/admin/groups/${encodeURIComponent(groupName)}`, 'DELETE');
+  }
+
+  async function updateAdminCalendarGroup(calendarId, groupName) {
+    return request(`/api/admin/calendars/${encodeURIComponent(calendarId)}/group`, 'PUT', { groupName });
+  }
+
+  let pendingGroupResourceCreateResolve = null;
+
+  function closeGroupResourceCreateDialog(result) {
+    if (pendingGroupResourceCreateResolve) {
+      const resolve = pendingGroupResourceCreateResolve;
+      pendingGroupResourceCreateResolve = null;
+      resolve(result);
+    }
+    if (groupCreateResourceDialog && groupCreateResourceDialog.open) {
+      groupCreateResourceDialog.close();
+    }
+  }
+
+  function confirmGroupResourceCreation(groupName, resourceName) {
+    return new Promise((resolve) => {
+      pendingGroupResourceCreateResolve = resolve;
+      if (groupCreateResourceTitle) {
+        groupCreateResourceTitle.textContent = 'Create Resource';
+      }
+      if (groupCreateResourceMessage) {
+        groupCreateResourceMessage.textContent = `Resource "${resourceName}" does not exist. Create it and add it to ${groupName}?`;
+      }
+      if (groupCreateResourceDialog) {
+        groupCreateResourceDialog.showModal();
+      } else {
+        resolve(false);
+      }
+    });
+  }
+
+  async function loadAdminData() {
+    if (!isAdminUser()) return;
+
+    let usersData = null;
+    let usersError = null;
+
+    try {
+      usersData = await request('/api/admin/users');
+    } catch (error) {
+      usersError = error instanceof Error ? error.message : String(error);
+      console.error('Failed to load admin users:', error);
+    }
+
+    adminUsersData = usersData || { users: [], resources: [], resourceGroups: {}, groups: [], accessRequests: [], error: usersError };
+
+    if (usersError) {
+      showSaveToast('Admin data warning', 'Some admin data could not be loaded. Check console logs.');
+    }
+
+    renderAdminPanel();
+  }
+
+  function renderAdminPanel() {
+    if (!isAdminUser() || !adminUsersData) {
+      if (adminGroupGrid) adminGroupGrid.innerHTML = '';
+      if (adminUserGrid) adminUserGrid.innerHTML = '';
+      if (adminAccessRequestsGrid) adminAccessRequestsGrid.innerHTML = '';
+      return;
+    }
+
+    if (!adminGroupGrid || !adminUserGrid || !adminAccessRequestsGrid) {
+      console.error('Admin panel containers are missing from the DOM.');
+      return;
+    }
+    adminGroupGrid.innerHTML = '';
+    adminUserGrid.innerHTML = '';
+    adminAccessRequestsGrid.innerHTML = '';
+
+    const renderResourceCatalog = (container, resourceList, selectedIds, onAssign) => {
+      container.innerHTML = '';
+      for (const resource of resourceList) {
+        const alreadyAssigned = selectedIds.includes(resource.id);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `admin-resource-option${alreadyAssigned ? ' assigned' : ''}`;
+        button.textContent = alreadyAssigned
+          ? `${resource.group || 'General'} / ${resource.name} (assigned)`
+          : `${resource.group || 'General'} / ${resource.name}`;
+        if (alreadyAssigned) {
+          button.disabled = true;
+          button.setAttribute('aria-disabled', 'true');
+        } else {
+          button.onclick = async () => {
+            await onAssign(resource.id);
+          };
+        }
+        container.appendChild(button);
+      }
+    };
+
+    const userResources = adminUsersData.resources || [];
+    const adminGroups = adminUsersData.groups || [];
+
+    const calendarEditorsCard = document.createElement('section');
+    calendarEditorsCard.className = 'admin-link-card';
+
+    const calendarEditorsTitle = document.createElement('strong');
+    calendarEditorsTitle.textContent = 'Calendar Editors';
+
+    const calendarEditorsNote = document.createElement('div');
+    calendarEditorsNote.className = 'admin-helper';
+    calendarEditorsNote.textContent = 'Open an editor page for each calendar to update its name, group, blurb, color, and image.';
+
+    const calendarEditorsGrid = document.createElement('div');
+    calendarEditorsGrid.className = 'admin-resource-catalog';
+    for (const resource of userResources) {
+      const linkButton = document.createElement('button');
+      linkButton.type = 'button';
+      linkButton.className = 'admin-resource-option';
+      linkButton.textContent = `${resource.group || 'General'} / ${resource.name}`;
+      linkButton.onclick = () => {
+        window.location.href = `/calendar-edit/${encodeURIComponent(resource.id)}`;
+      };
+      calendarEditorsGrid.appendChild(linkButton);
+    }
+
+    calendarEditorsCard.appendChild(calendarEditorsTitle);
+    calendarEditorsCard.appendChild(calendarEditorsNote);
+    calendarEditorsCard.appendChild(calendarEditorsGrid);
+
+    const groupCreateCard = document.createElement('section');
+    groupCreateCard.className = 'admin-link-card';
+
+    const groupCreateTitle = document.createElement('strong');
+    groupCreateTitle.textContent = 'Create Group';
+
+    const groupCreateRow = document.createElement('div');
+    groupCreateRow.className = 'admin-editor-row';
+
+    const groupCreateInput = document.createElement('input');
+    groupCreateInput.className = 'admin-datalist-input';
+    groupCreateInput.type = 'text';
+    groupCreateInput.placeholder = 'New group name';
+
+    const groupCreateButton = document.createElement('button');
+    groupCreateButton.type = 'button';
+    groupCreateButton.className = 'admin-save-button';
+    groupCreateButton.textContent = 'Create';
+    groupCreateButton.onclick = async () => {
+      const groupName = groupCreateInput.value.trim();
+      if (!groupName) {
+        showSaveToast('Group name required', 'Enter a name before creating the group.');
+        return;
+      }
+      try {
+        await createAdminGroup(groupName);
+        groupCreateInput.value = '';
+        showSaveToast('Group created', `${groupName} was added.`);
+        await loadAdminData();
+      } catch (error) {
+        showSaveToast('Group create failed', error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    groupCreateRow.appendChild(groupCreateInput);
+    groupCreateRow.appendChild(groupCreateButton);
+    groupCreateCard.appendChild(groupCreateTitle);
+    groupCreateCard.appendChild(groupCreateRow);
+    adminGroupGrid.appendChild(calendarEditorsCard);
+    adminGroupGrid.appendChild(groupCreateCard);
+
+    for (const group of adminGroups) {
+      const groupCard = document.createElement('section');
+      groupCard.className = 'admin-link-card';
+
+      const groupHeader = document.createElement('strong');
+      groupHeader.textContent = group.name;
+
+      const groupEditorRow = document.createElement('div');
+      groupEditorRow.className = 'admin-editor-row';
+
+      const groupRenameInput = document.createElement('input');
+      groupRenameInput.className = 'admin-datalist-input';
+      groupRenameInput.type = 'text';
+      groupRenameInput.value = group.name;
+      groupRenameInput.disabled = group.name === 'General';
+
+      const groupRenameButton = document.createElement('button');
+      groupRenameButton.type = 'button';
+      groupRenameButton.className = 'admin-save-button';
+      groupRenameButton.textContent = 'Rename';
+      groupRenameButton.disabled = group.name === 'General';
+      groupRenameButton.onclick = async () => {
+        const nextName = groupRenameInput.value.trim();
+        if (!nextName) {
+          showSaveToast('Group name required', 'Enter a name before renaming the group.');
+          return;
+        }
+        if (nextName === group.name) {
+          return;
+        }
+        try {
+          await renameAdminGroup(group.name, nextName);
+          showSaveToast('Group renamed', `${group.name} is now ${nextName}.`);
+          await loadAdminData();
+        } catch (error) {
+          showSaveToast('Rename failed', error instanceof Error ? error.message : String(error));
+        }
+      };
+
+      const groupDeleteButton = document.createElement('button');
+      groupDeleteButton.type = 'button';
+      groupDeleteButton.className = 'admin-save-button';
+      groupDeleteButton.textContent = 'Delete';
+      groupDeleteButton.disabled = group.name === 'General';
+      groupDeleteButton.onclick = async () => {
+        const confirmed = window.confirm(`Delete group ${group.name}? Resources will move to General.`);
+        if (!confirmed) return;
+        try {
+          await deleteAdminGroup(group.name);
+          showSaveToast('Group deleted', `${group.name} was removed.`);
+          await loadAdminData();
+        } catch (error) {
+          showSaveToast('Delete failed', error instanceof Error ? error.message : String(error));
+        }
+      };
+
+      groupEditorRow.appendChild(groupRenameInput);
+      groupEditorRow.appendChild(groupRenameButton);
+      groupEditorRow.appendChild(groupDeleteButton);
+
+      const groupMeta = document.createElement('div');
+      groupMeta.className = 'admin-resource-count';
+      const groupCount = Array.isArray(group.calendarIds) ? group.calendarIds.length : 0;
+      groupMeta.textContent = `${groupCount} resource${groupCount === 1 ? '' : 's'}`;
+
+      const groupAssignedLabel = document.createElement('div');
+      groupAssignedLabel.className = 'admin-resource-group-label';
+      groupAssignedLabel.textContent = 'Resources in group';
+
+      const groupPills = document.createElement('div');
+      groupPills.className = 'admin-resource-pills';
+      const assignedResources = Array.isArray(group.calendars) ? group.calendars : [];
+      if (assignedResources.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.className = 'admin-empty-state';
+        emptyState.textContent = 'No resources assigned yet.';
+        groupPills.appendChild(emptyState);
+      } else {
+        for (const resource of assignedResources) {
+          const pill = document.createElement('span');
+          pill.className = 'admin-pill';
+          pill.textContent = `${resource.name}`;
+          if (group.name !== 'General') {
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.className = 'admin-pill-remove';
+            removeButton.title = 'Move back to General';
+            removeButton.textContent = '×';
+            removeButton.onclick = async () => {
+              try {
+                await updateAdminCalendarGroup(resource.id, 'General');
+                showSaveToast('Resource moved', `${resource.name} moved to General.`);
+                await loadAdminData();
+              } catch (error) {
+                showSaveToast('Move failed', error instanceof Error ? error.message : String(error));
+              }
+            };
+
+            pill.appendChild(removeButton);
+          }
+          groupPills.appendChild(pill);
+        }
+      }
+
+      const groupCalendarIds = Array.isArray(group.calendarIds) ? group.calendarIds : [];
+      const availableResources = userResources.filter((resource) => !groupCalendarIds.includes(resource.id));
+      const groupAddLabel = document.createElement('div');
+      groupAddLabel.className = 'admin-resource-group-label';
+      groupAddLabel.textContent = 'Add resources to this group';
+
+      const groupAddRow = document.createElement('div');
+      groupAddRow.className = 'admin-editor-row';
+
+      const groupAddInput = document.createElement('input');
+      groupAddInput.className = 'admin-datalist-input';
+      groupAddInput.type = 'text';
+      groupAddInput.placeholder = 'Type a resource name';
+
+      const groupAddListId = `admin-group-add-options-${group.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      groupAddInput.setAttribute('list', groupAddListId);
+
+      const groupAddList = document.createElement('datalist');
+      groupAddList.id = groupAddListId;
+      for (const resource of availableResources) {
+        const option = document.createElement('option');
+        option.value = resource.name;
+        option.label = `${resource.group || 'General'} resource`;
+        groupAddList.appendChild(option);
+      }
+
+      const addResourceToGroup = async () => {
+        const selectedName = groupAddInput.value.trim();
+        if (!selectedName) {
+          showSaveToast('Resource name required', 'Type a resource name before adding it to the group.');
+          return;
+        }
+        try {
+          const matchedResource = userResources.find((resource) => resource.name.toLowerCase() === selectedName.toLowerCase());
+          if (matchedResource) {
+            await updateAdminCalendarGroup(matchedResource.id, group.name);
+            groupAddInput.value = '';
+            showSaveToast('Resource moved', `${matchedResource.name} moved to ${group.name}.`);
+            await loadAdminData();
+            return;
+          }
+
+          const confirmed = await confirmGroupResourceCreation(group.name, selectedName);
+          if (!confirmed) {
+            return;
+          }
+
+          const created = await createAdminResourceForGroup(selectedName, group.name);
+          groupAddInput.value = '';
+          showSaveToast(
+            created && created.created ? 'Resource created' : 'Resource added',
+            `${selectedName} was added to ${group.name}.`,
+          );
+          await loadAdminData();
+        } catch (error) {
+          showSaveToast('Move failed', error instanceof Error ? error.message : String(error));
+        }
+      };
+
+      const groupAddButton = document.createElement('button');
+      groupAddButton.type = 'button';
+      groupAddButton.className = 'admin-save-button';
+      groupAddButton.textContent = 'Add';
+      groupAddButton.onclick = addResourceToGroup;
+
+      groupAddInput.addEventListener('keydown', async (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          await addResourceToGroup();
+        }
+      });
+
+      groupAddRow.appendChild(groupAddInput);
+      groupAddRow.appendChild(groupAddButton);
+
+      groupCard.appendChild(groupHeader);
+      groupCard.appendChild(groupMeta);
+      if (group.name === 'General') {
+        const defaultNote = document.createElement('div');
+        defaultNote.className = 'admin-resource-group-label';
+        defaultNote.textContent = 'Default group';
+        groupCard.appendChild(defaultNote);
+      } else {
+        groupCard.appendChild(groupEditorRow);
+      }
+      groupCard.appendChild(groupAssignedLabel);
+      groupCard.appendChild(groupPills);
+      groupCard.appendChild(groupAddLabel);
+      groupCard.appendChild(groupAddRow);
+      groupCard.appendChild(groupAddList);
+      adminGroupGrid.appendChild(groupCard);
+    }
+
+    const userCreateCard = document.createElement('section');
+    userCreateCard.className = 'admin-link-card';
+
+    const userCreateTitle = document.createElement('strong');
+    userCreateTitle.textContent = 'Create User (No Google Required)';
+
+    const userCreateRow = document.createElement('div');
+    userCreateRow.className = 'admin-editor-row';
+
+    const userCreateNameInput = document.createElement('input');
+    userCreateNameInput.className = 'admin-datalist-input';
+    userCreateNameInput.placeholder = 'Display name (required)';
+
+    const userCreateEmailInput = document.createElement('input');
+    userCreateEmailInput.className = 'admin-datalist-input';
+    userCreateEmailInput.placeholder = 'Email (optional, local placeholder if empty)';
+
+    userCreateRow.append(userCreateNameInput, userCreateEmailInput);
+
+    const userCreateResourceInput = document.createElement('input');
+    userCreateResourceInput.className = 'admin-datalist-input';
+    const userCreateListId = 'admin-user-create-options';
+    userCreateResourceInput.setAttribute('list', userCreateListId);
+    userCreateResourceInput.placeholder = 'Optional: add calendar access before create';
+
+    const userCreateList = document.createElement('datalist');
+    userCreateList.id = userCreateListId;
+    for (const resource of userResources) {
+      const option = document.createElement('option');
+      option.value = resource.name;
+      option.label = `${resource.group} resource`;
+      userCreateList.appendChild(option);
+    }
+
+    const stagedUserResourceIds = [];
+    const stagedUserResourcePills = document.createElement('div');
+    stagedUserResourcePills.className = 'admin-resource-pills';
+    const renderStagedUserResourcePills = () => {
+      stagedUserResourcePills.innerHTML = '';
+      for (const resourceId of stagedUserResourceIds) {
+        const pill = document.createElement('span');
+        pill.className = 'admin-pill';
+        pill.textContent = resourceName(resourceId);
+        stagedUserResourcePills.appendChild(pill);
+      }
+    };
+
+    const userCreateGroupInput = document.createElement('input');
+    userCreateGroupInput.className = 'admin-datalist-input';
+    const userCreateGroupListId = 'admin-user-create-group-options';
+    userCreateGroupInput.setAttribute('list', userCreateGroupListId);
+    userCreateGroupInput.placeholder = 'Optional: add group membership before create';
+
+    const userCreateGroupList = document.createElement('datalist');
+    userCreateGroupList.id = userCreateGroupListId;
+    for (const group of adminGroups) {
+      const option = document.createElement('option');
+      option.value = group.name;
+      option.label = `${group.name} group`;
+      userCreateGroupList.appendChild(option);
+    }
+
+    const stagedUserGroupNames = [];
+    const stagedUserGroupPills = document.createElement('div');
+    stagedUserGroupPills.className = 'admin-resource-pills';
+    const renderStagedUserGroupPills = () => {
+      stagedUserGroupPills.innerHTML = '';
+      for (const groupName of stagedUserGroupNames) {
+        const pill = document.createElement('span');
+        pill.className = 'admin-pill';
+
+        const label = document.createElement('span');
+        label.textContent = groupName;
+
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'admin-pill-remove';
+        removeButton.title = `Remove ${groupName}`;
+        removeButton.setAttribute('aria-label', removeButton.title);
+        removeButton.textContent = 'x';
+        removeButton.onclick = () => {
+          const nextGroups = stagedUserGroupNames.filter(name => name !== groupName);
+          stagedUserGroupNames.splice(0, stagedUserGroupNames.length, ...nextGroups);
+          renderStagedUserGroupPills();
+        };
+
+        pill.append(label, removeButton);
+        stagedUserGroupPills.appendChild(pill);
+      }
+    };
+
+    const stageUserGroupButton = document.createElement('button');
+    stageUserGroupButton.type = 'button';
+    stageUserGroupButton.className = 'btn btn-neutral';
+    stageUserGroupButton.textContent = 'Stage Group';
+    stageUserGroupButton.onclick = () => {
+      const value = userCreateGroupInput.value.trim();
+      if (!value) return;
+      const matchedGroup = adminGroups.find(group => group.name.toLowerCase() === value.toLowerCase());
+      if (!matchedGroup) {
+        showSaveToast('Not found', `No group matches "${value}".`);
+        return;
+      }
+      if (!stagedUserGroupNames.includes(matchedGroup.name)) {
+        stagedUserGroupNames.push(matchedGroup.name);
+        stagedUserGroupNames.sort((left, right) => left.localeCompare(right));
+      }
+      userCreateGroupInput.value = '';
+      renderStagedUserGroupPills();
+    };
+
+    const stageUserResourceButton = document.createElement('button');
+    stageUserResourceButton.type = 'button';
+    stageUserResourceButton.className = 'btn btn-neutral';
+    stageUserResourceButton.textContent = 'Stage Resource';
+    stageUserResourceButton.onclick = () => {
+      const value = userCreateResourceInput.value.trim();
+      if (!value) return;
+
+      const matched = userResources.find(resource => resource.name.toLowerCase() === value.toLowerCase());
+      if (!matched) {
+        showSaveToast('Not found', `No calendar matches "${value}".`);
+        return;
+      }
+
+      if (!stagedUserResourceIds.includes(matched.id)) {
+        stagedUserResourceIds.push(matched.id);
+      }
+      stagedUserResourceIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
+      userCreateResourceInput.value = '';
+      renderStagedUserResourcePills();
+    };
+
+    const createUserButton = document.createElement('button');
+    createUserButton.type = 'button';
+    createUserButton.className = 'btn btn-primary';
+    createUserButton.textContent = 'Create User';
+
+    const userCreateUrlRow = document.createElement('div');
+    userCreateUrlRow.className = 'admin-editor-row';
+
+    const userCreateUrlOutput = document.createElement('input');
+    userCreateUrlOutput.className = 'admin-datalist-input';
+    userCreateUrlOutput.placeholder = 'Login URL will appear here after user creation';
+    userCreateUrlOutput.readOnly = true;
+
+    const copyUserCreateUrlButton = document.createElement('button');
+    copyUserCreateUrlButton.type = 'button';
+    copyUserCreateUrlButton.className = 'btn btn-neutral';
+    copyUserCreateUrlButton.textContent = 'Copy Login URL';
+    copyUserCreateUrlButton.disabled = true;
+    copyUserCreateUrlButton.onclick = async () => {
+      const loginUrl = userCreateUrlOutput.value.trim();
+      if (!loginUrl) {
+        showSaveToast('No URL yet', 'Create a user first to generate a login URL.');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(loginUrl);
+        showSaveToast('Copied', 'Login URL copied to clipboard.');
+      } catch {
+        showSaveToast('Copy failed', 'Could not access clipboard. Copy the URL manually.');
+      }
+    };
+
+    userCreateUrlRow.append(userCreateUrlOutput, copyUserCreateUrlButton);
+
+    createUserButton.onclick = async () => {
+      const name = userCreateNameInput.value.trim();
+      const email = userCreateEmailInput.value.trim();
+      if (!name) {
+        showSaveToast('Missing name', 'User name is required.');
+        return;
+      }
+
+      const created = await createAdminUser(name, email, stagedUserResourceIds, stagedUserGroupNames);
+      const loginUrl = created && created.loginUrl ? created.loginUrl : '';
+      const tokenValue = created && created.token ? created.token : 'unknown';
+      if (loginUrl) {
+        userCreateUrlOutput.value = loginUrl;
+        copyUserCreateUrlButton.disabled = false;
+      }
+      showSaveToast('User created', loginUrl || `Login token: ${tokenValue}`);
+
+      userCreateNameInput.value = '';
+      userCreateEmailInput.value = '';
+      userCreateResourceInput.value = '';
+      userCreateGroupInput.value = '';
+      stagedUserResourceIds.splice(0, stagedUserResourceIds.length);
+      stagedUserGroupNames.splice(0, stagedUserGroupNames.length);
+      renderStagedUserResourcePills();
+      renderStagedUserGroupPills();
+      await loadAdminData();
+    };
+
+    const userCreateButtons = document.createElement('div');
+    userCreateButtons.className = 'btn-group';
+    userCreateButtons.append(stageUserResourceButton, createUserButton);
+
+    const userCreateResourceRow = document.createElement('div');
+    userCreateResourceRow.className = 'admin-editor-row';
+    userCreateResourceRow.append(userCreateResourceInput, userCreateButtons);
+
+    const userCreateGroupRow = document.createElement('div');
+    userCreateGroupRow.className = 'admin-editor-row';
+    userCreateGroupRow.append(userCreateGroupInput, stageUserGroupButton);
+
+    const userCreateHelper = document.createElement('div');
+    userCreateHelper.className = 'admin-helper';
+    userCreateHelper.textContent = 'Creates a local user with a generated login token. Share the token for direct login access, and stage group membership to grant calendar access dynamically.';
+
+    userCreateCard.append(
+      userCreateTitle,
+      userCreateRow,
+      userCreateList,
+      userCreateResourceRow,
+      stagedUserResourcePills,
+      userCreateGroupRow,
+      userCreateGroupList,
+      stagedUserGroupPills,
+      userCreateUrlRow,
+      userCreateHelper,
+    );
+    adminUserGrid.appendChild(userCreateCard);
+
+    const usersToRender = Array.isArray(adminUsersData.users) ? adminUsersData.users : [];
+    for (const user of usersToRender) {
+      const card = document.createElement('section');
+      card.className = 'admin-link-card';
+
+      const selectedIds = Array.isArray(user.calendarIds) ? [...user.calendarIds] : [];
+      const selectedGroupNames = Array.isArray(user.groupNames)
+        ? [...user.groupNames]
+        : (user.groupName ? [user.groupName] : []);
+
+      const head = document.createElement('div');
+      head.className = 'admin-link-head';
+
+      const titleWrap = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = user.name || user.email || 'Unnamed user';
+      const emailLine = document.createElement('div');
+      emailLine.className = 'admin-link-token';
+      emailLine.textContent = user.email || 'No email';
+      const meta = document.createElement('div');
+      meta.className = 'admin-link-meta';
+      meta.textContent = `Last login: ${user.lastLogin || 'never'}`;
+
+      const loginLinkWrap = document.createElement('div');
+      loginLinkWrap.className = 'admin-link-meta';
+      const loginLink = document.createElement('a');
+      loginLink.href = user.loginUrl || '#';
+      loginLink.textContent = user.loginUrl || 'No login URL';
+      loginLink.target = '_blank';
+      loginLink.rel = 'noreferrer noopener';
+      if (!user.loginUrl) {
+        loginLink.setAttribute('aria-disabled', 'true');
+        loginLink.style.pointerEvents = 'none';
+        loginLink.style.opacity = '0.65';
+      }
+      loginLinkWrap.append(loginLink);
+
+      titleWrap.append(title, emailLine, meta, loginLinkWrap);
+
+      const roleBadge = document.createElement('span');
+      roleBadge.className = `admin-user-role ${user.role === 'admin' ? 'admin' : 'user'}`;
+      roleBadge.textContent = user.role || 'user';
+
+      const calendarSectionTitle = document.createElement('div');
+      calendarSectionTitle.className = 'admin-section-title';
+      calendarSectionTitle.textContent = 'Calendar access';
+      const allResourcesTitle = document.createElement('div');
+      allResourcesTitle.className = 'admin-section-title';
+      allResourcesTitle.textContent = 'All calendars';
+      const allResourcesCatalog = document.createElement('div');
+      allResourcesCatalog.className = 'admin-resource-catalog';
+
+      const calendarPills = document.createElement('div');
+      calendarPills.className = 'admin-resource-pills';
+      const renderCalendarPills = () => {
+        calendarPills.innerHTML = '';
+        for (const resourceId of selectedIds) {
+          const pill = document.createElement('span');
+          pill.className = 'admin-pill';
+
+          const label = document.createElement('span');
+          label.textContent = resourceName(resourceId);
+
+          const removeButton = document.createElement('button');
+          removeButton.type = 'button';
+          removeButton.className = 'admin-pill-remove';
+          removeButton.title = `Remove ${resourceName(resourceId)} from ${user.name || user.email}`;
+          removeButton.setAttribute('aria-label', removeButton.title);
+          removeButton.textContent = 'x';
+          removeButton.onclick = async () => {
+            const nextIds = selectedIds.filter(id => id !== resourceId);
+            selectedIds.splice(0, selectedIds.length, ...nextIds);
+            await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+            user.calendarIds = [...selectedIds];
+            renderCalendarPills();
+            renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+          };
+
+          pill.append(label, removeButton);
+          calendarPills.appendChild(pill);
+        }
+      };
+
+      const groupSectionTitle = document.createElement('div');
+      groupSectionTitle.className = 'admin-section-title';
+      groupSectionTitle.textContent = 'Group membership';
+
+      const groupPills = document.createElement('div');
+      groupPills.className = 'admin-resource-pills';
+      const renderGroupPills = () => {
+        groupPills.innerHTML = '';
+        for (const groupName of selectedGroupNames) {
+          const pill = document.createElement('span');
+          pill.className = 'admin-pill';
+
+          const label = document.createElement('span');
+          label.textContent = groupName;
+
+          const removeButton = document.createElement('button');
+          removeButton.type = 'button';
+          removeButton.className = 'admin-pill-remove';
+          removeButton.title = `Remove ${groupName} from ${user.name || user.email}`;
+          removeButton.setAttribute('aria-label', removeButton.title);
+          removeButton.textContent = 'x';
+          removeButton.onclick = async () => {
+            const nextGroups = selectedGroupNames.filter(name => name !== groupName);
+            selectedGroupNames.splice(0, selectedGroupNames.length, ...nextGroups);
+            await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+            user.groupNames = [...selectedGroupNames];
+            user.groupName = selectedGroupNames[0] || null;
+            renderGroupPills();
+          };
+
+          pill.append(label, removeButton);
+          groupPills.appendChild(pill);
+        }
+      };
+
+      const groupEditorRow = document.createElement('div');
+      groupEditorRow.className = 'admin-editor-row';
+
+      const groupInput = document.createElement('input');
+      const groupDatalistId = `admin-user-group-options-${user.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      groupInput.className = 'admin-datalist-input';
+      groupInput.setAttribute('list', groupDatalistId);
+      groupInput.placeholder = 'Type a group name';
+
+      const groupDatalist = document.createElement('datalist');
+      groupDatalist.id = groupDatalistId;
+      for (const group of adminGroups) {
+        const option = document.createElement('option');
+        option.value = group.name;
+        option.label = `${group.name} group`;
+        groupDatalist.appendChild(option);
+      }
+
+      const addGroupButton = document.createElement('button');
+      addGroupButton.type = 'button';
+      addGroupButton.className = 'btn btn-primary';
+      addGroupButton.textContent = 'Add Group';
+      addGroupButton.onclick = async () => {
+        const value = groupInput.value.trim();
+        if (!value) return;
+        const matchedGroup = adminGroups.find(group => group.name.toLowerCase() === value.toLowerCase());
+        if (!matchedGroup) {
+          showSaveToast('Not found', `No group matches "${value}".`);
+          return;
+        }
+        if (!selectedGroupNames.includes(matchedGroup.name)) {
+          selectedGroupNames.push(matchedGroup.name);
+          selectedGroupNames.sort((left, right) => left.localeCompare(right));
+        }
+        groupInput.value = '';
+        await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+        user.groupNames = [...selectedGroupNames];
+        user.groupName = selectedGroupNames[0] || null;
+        renderGroupPills();
+      };
+
+      groupEditorRow.append(groupInput, addGroupButton);
+
+      const editorRow = document.createElement('div');
+      editorRow.className = 'admin-editor-row';
+
+      const input = document.createElement('input');
+      const datalistId = `admin-user-resource-options-${user.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      input.className = 'admin-datalist-input';
+      input.setAttribute('list', datalistId);
+      input.placeholder = 'Type a calendar name';
+
+      const datalist = document.createElement('datalist');
+      datalist.id = datalistId;
+      for (const resource of userResources) {
+        const option = document.createElement('option');
+        option.value = resource.name;
+        option.label = `${resource.group} resource`;
+        datalist.appendChild(option);
+      }
+
+      const addButton = document.createElement('button');
+      addButton.type = 'button';
+      addButton.className = 'btn btn-primary';
+      addButton.textContent = 'Add';
+      addButton.onclick = async () => {
+        const value = input.value.trim();
+        if (!value) return;
+
+        const matched = userResources.find(resource => resource.name.toLowerCase() === value.toLowerCase());
+        if (!matched) {
+          showSaveToast('Not found', `No calendar matches "${value}".`);
+          return;
+        }
+
+        if (!selectedIds.includes(matched.id)) selectedIds.push(matched.id);
+        selectedIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
+        await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+        user.calendarIds = [...selectedIds];
+        renderCalendarPills();
+        renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+        input.value = '';
+      };
+
+      const assignResourceToUser = async resourceId => {
+        if (selectedIds.includes(resourceId)) return;
+        selectedIds.push(resourceId);
+        selectedIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
+        await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+        user.calendarIds = [...selectedIds];
+        renderCalendarPills();
+        renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+      };
+
+      renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+
+      const quickAddGroupsTitle = document.createElement('div');
+      quickAddGroupsTitle.className = 'admin-section-title';
+      quickAddGroupsTitle.textContent = 'Quick add group membership';
+      const quickAddGroupsContainer = document.createElement('div');
+      quickAddGroupsContainer.className = 'admin-resource-catalog';
+      for (const group of adminGroups) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'admin-resource-option';
+        const alreadyAdded = selectedGroupNames.includes(group.name);
+        if (alreadyAdded) {
+          button.classList.add('assigned');
+          button.disabled = true;
+          button.setAttribute('aria-disabled', 'true');
+        }
+        button.textContent = alreadyAdded
+          ? `${group.name} (assigned)`
+          : `${group.name} group`;
+        if (!alreadyAdded) {
+          button.onclick = async () => {
+            selectedGroupNames.push(group.name);
+            selectedGroupNames.sort((left, right) => left.localeCompare(right));
+            await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+            user.groupNames = [...selectedGroupNames];
+            user.groupName = selectedGroupNames[0] || null;
+            renderGroupPills();
+            // Re-render the quick add groups to update button states
+            const buttons = quickAddGroupsContainer.querySelectorAll('button');
+            for (let i = 0; i < buttons.length; i++) {
+              const groupEntry = adminGroups[i];
+              const allAdded = selectedGroupNames.includes(groupEntry.name);
+              buttons[i].disabled = allAdded;
+              buttons[i].setAttribute('aria-disabled', String(allAdded));
+              buttons[i].classList.toggle('assigned', allAdded);
+              buttons[i].textContent = allAdded
+                ? `${groupEntry.name} (assigned)`
+                : `${groupEntry.name} group`;
+            }
+          };
+        }
+        quickAddGroupsContainer.appendChild(button);
+      }
+
+      editorRow.append(input, addButton);
+
+      const helper = document.createElement('div');
+      helper.className = 'admin-helper';
+      helper.textContent = 'Remove individual calendars with x, or assign whole groups to grant access dynamically.';
+
+      head.append(titleWrap, roleBadge);
+      renderCalendarPills();
+      renderGroupPills();
+
+      card.append(head, calendarSectionTitle, calendarPills, groupSectionTitle, groupPills, groupEditorRow, groupDatalist, quickAddGroupsTitle, quickAddGroupsContainer, allResourcesTitle, allResourcesCatalog, datalist, editorRow, helper);
+      adminUserGrid.appendChild(card);
+    }
+
+    if (usersToRender.length === 0) {
+      const emptyUsers = document.createElement('div');
+      emptyUsers.className = 'admin-helper';
+      emptyUsers.textContent = adminUsersData.error
+        ? `Could not load users: ${adminUsersData.error}`
+        : 'No users found.';
+      adminUserGrid.appendChild(emptyUsers);
+    }
+
+    const accessRequests = Array.isArray(adminUsersData.accessRequests) ? adminUsersData.accessRequests : [];
+    if (accessRequests.length === 0) {
+      const emptyRequests = document.createElement('div');
+      emptyRequests.className = 'admin-helper';
+      emptyRequests.textContent = 'No access requests.';
+      adminAccessRequestsGrid.appendChild(emptyRequests);
+    } else {
+      for (const accessRequest of accessRequests) {
+        const card = document.createElement('section');
+        card.className = 'admin-link-card';
+
+        const head = document.createElement('div');
+        head.className = 'admin-link-head';
+
+        const titleWrap = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = accessRequest.targetType === 'group'
+          ? `Group request: ${accessRequest.targetLabel}`
+          : `Calendar request: ${accessRequest.targetLabel}`;
+        const meta = document.createElement('div');
+        meta.className = 'admin-link-meta';
+        meta.textContent = `Requested by ${accessRequest.requesterName || accessRequest.requesterEmail || 'Unknown user'}`;
+        const extra = document.createElement('div');
+        extra.className = 'admin-link-token';
+        extra.textContent = `Requested at: ${accessRequest.requestedAt || 'unknown'}`;
+        const status = document.createElement('div');
+        const accessStatus = accessRequest.status === 'approved'
+          ? 'approved'
+          : accessRequest.status === 'hidden'
+            ? 'hidden'
+            : 'requested';
+        status.className = `admin-status-pill admin-status-pill--${accessStatus}`;
+        status.textContent = accessStatus === 'approved' ? 'Approved' : accessStatus === 'hidden' ? 'Hidden' : 'Requested';
+        titleWrap.append(title, meta, extra, status);
+
+        const approveButton = document.createElement('button');
+        approveButton.type = 'button';
+        approveButton.className = 'btn btn-primary';
+        if (accessRequest.status === 'hidden') {
+          approveButton.textContent = 'Hidden';
+          approveButton.disabled = true;
+        } else if (accessRequest.status === 'approved') {
+          approveButton.textContent = 'Approved';
+          approveButton.disabled = true;
+        } else {
+          approveButton.textContent = 'Approve';
+          approveButton.onclick = async () => {
+            try {
+              await request(`/api/admin/access-requests/${encodeURIComponent(accessRequest.id)}/approve`, 'POST');
+              showSaveToast('Access approved', `${accessRequest.requesterName || 'User'} now has access.`);
+              await loadAdminData();
+            } catch (error) {
+              showErrorToast('Approval failed', error instanceof Error ? error.message : String(error));
+            }
+          };
+        }
+
+        head.append(titleWrap, approveButton);
+        card.append(head);
+
+        const detail = document.createElement('div');
+        detail.className = 'admin-helper';
+        detail.textContent = accessRequest.targetType === 'group'
+          ? `Approving this request grants access to all calendars in ${accessRequest.targetLabel}.`
+          : `Approving this request grants access to ${accessRequest.targetLabel}.`;
+        card.appendChild(detail);
+
+        adminAccessRequestsGrid.appendChild(card);
+      }
+    }
+  }
+
+  function linkTokensFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const keys = ['link', 'links', 'token', 'tokens'];
+    for (const key of keys) {
+      for (const value of params.getAll(key)) {
+        for (const token of value.split(',')) {
+          const normalized = token.trim();
+          if (normalized) return normalized; // Return first valid token
+        }
+      }
+    }
+    return null; // No token found
+  }
+
+  function applyLinkVisibility(links) {
+    const token = linkTokensFromUrl();
+    currentToken = token; // Store for API requests
+
+    const linkMap = new Map((links || []).map(link => [link.token, link]));
+    const link = token ? linkMap.get(token) : null;
+
+    if (link) {
+      tokenAllowedCalendars = new Set(link.calendarIds || []);
+      hasValidToken = true;
+      return;
+    }
+
+    hasValidToken = false;
+    tokenAllowedCalendars = null;
+    hiddenCals = new Set(allCalendars.map(calendar => calendar.id));
+  }
+
+  function showLandingScreen(options = {}) {
+    const invalidToken = Boolean(options.invalidToken);
+    const attemptedToken = options.attemptedToken || '';
+    const validatingToken = Boolean(options.validatingToken);
+    appShell.style.display = 'none';
+    landingScreen.style.display = 'flex';
+    startSlimeSimulation();
+
+    if (attemptedToken) tokenInput.value = attemptedToken;
+
+    if (validatingToken) {
+      tokenHelp.textContent = 'Validating access token...';
+    } else {
+      tokenHelp.textContent = (invalidToken || currentToken)
+        ? 'Token not recognized. Check the token and try again.'
+        : 'A valid token is required to access scheduling data.';
+    }
+    tokenSubmit.disabled = validatingToken;
+
+    const submitToken = async () => {
+      const value = tokenInput.value.trim();
+      if (!value) {
+        tokenHelp.textContent = 'Please enter a token to continue.';
+        return;
+      }
+      tokenSubmit.disabled = true;
+      tokenHelp.textContent = 'Validating\u2026';
+
+      // ── Phase 1: validate token via API ──────────────────────────────────
+      // Set currentToken before the request so request() can attach it.
+      currentToken = value;
+      let validation, cals, session;
+      try {
+        ({ validation, calendars: cals, session, apiToken: currentToken } = await validateTokenAndLoadCalendars(value));
+      } catch (err) {
+        // Token was rejected — reset and show feedback.
+        currentToken = null;
+        tokenHelp.textContent = 'Token not recognised. Check the token and try again.';
+        tokenSubmit.disabled = false;
+        return;
+      }
+
+      // ── Phase 2: token is valid — update state and show the app ──────────
+      // Do NOT reset currentToken from here on; any UI error must not
+      // invalidate the already-authenticated session.
+      await claimTokenResourcesForLoggedInUser(value);
+      tokenAllowedCalendars = new Set(validation.calendarIds || []);
+      hasValidToken = true;
+      currentUser = session && session.authenticated ? session.user : null;
+      setPersistedAuthToken(currentToken || value);
+      syncUserIdInUrl(currentUser);
+      allCalendars = cals;
+      // Persist token in URL without triggering a reload.
+      const url = new URL(window.location.href);
+      url.searchParams.set('token', value);
+      if (currentUser && currentUser.id) {
+        url.searchParams.set('user_id', currentUser.id);
+      }
+      history.replaceState({}, '', url.toString());
+      showAppShell();
+      renderSidebar();
+      void loadAccessCatalog();
+      try {
+        ensureCalendarLoaded();
+      } catch (e) {
+        console.error('FullCalendar render error (non-fatal):', e);
+      }
+    };
+
+    tokenSubmit.onclick = submitToken;
+    tokenInput.onkeydown = event => {
+      if (event.key === 'Enter') submitToken();
+    };
+
+    // ── Google OAuth Login ────────────────────────────────────────────────────
+    const googleLoginBtn = document.getElementById('google-login-btn');
+    if (googleLoginBtn) {
+      googleLoginBtn.onclick = async () => {
+        console.log('[LOGIN] Login button clicked, currentToken:', currentToken);
+        
+        try {
+          // First check if user has a valid persisted session
+          const sessionCheckOpts = {
+            method: 'GET',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+          };
+          const sessionResponse = await fetch('/api/auth/check-session', sessionCheckOpts);
+          if (sessionResponse.ok) {
+            const sessionData = await sessionResponse.json();
+            if (sessionData.authenticated && sessionData.token) {
+              // User has a valid session - use it to authenticate
+              console.log('[LOGIN] Valid session found, authenticating with persisted token');
+              const sessionToken = sessionData.apiToken || sessionData.token;
+              const urlToken = currentToken; // Token from URL parameter (if any)
+              
+              currentToken = sessionToken;
+              currentUser = sessionData.user;
+              syncUserIdInUrl(currentUser);
+              
+              // Clear landing screen and load app
+              showAppShell();
+              
+              // Load calendars and data
+              try {
+                const cals = await request('/api/calendars?token=' + encodeURIComponent(currentToken), 'GET', null, false);
+                tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
+                hasValidToken = true;
+                allCalendars = cals;
+                updateSidebar();
+                connectCalendarUpdatesSocket();
+                fcCalendar.refetchEvents();
+                if (window.__revealPage) window.__revealPage();
+              } catch (error) {
+                console.error('[LOGIN] Failed to load calendars with persisted session:', error);
+                // Fall through to OAuth as fallback
+                if (urlToken) {
+                  console.log('[LOGIN] Storing URL token before OAuth redirect:', urlToken);
+                  localStorage.setItem('pendingTokenToClaim', urlToken);
+                }
+                window.location.href = '/auth/google-login';
+                return;
+              }
+              
+              // If there was a URL token different from session token, claim it for this user
+              if (urlToken && urlToken !== sessionToken) {
+                console.log('[LOGIN] Claiming URL token for authenticated user:', urlToken);
+                claimTokenResourcesForLoggedInUser(urlToken).catch(err => {
+                  console.warn('[LOGIN] Failed to claim URL token:', err);
+                });
+              }
+              return;
+            }
+          }
+        } catch (error) {
+          console.warn('[LOGIN] Session check failed, proceeding with OAuth:', error);
+        }
+        
+        // No valid session - proceed with OAuth flow
+        if (currentToken) {
+          console.log('[LOGIN] Storing currentToken before OAuth redirect:', currentToken);
+          localStorage.setItem('pendingTokenToClaim', currentToken);
+        }
+        window.location.href = '/auth/google-login';
+      };
+    }
+  }
+
+  function showAppShell() {
+    landingScreen.style.display = 'none';
+    appShell.style.display = 'flex';
+    adminNavItem.style.display = isAdminUser() ? 'flex' : 'none';
+    setCurrentView('calendar');
+  }
+
+  function visibleCalendarColors(calendarIds) {
+    return (calendarIds || [])
+      .filter(calendarId => !hiddenCals.has(calendarId))
+      .map(calendarId => allCalendars.find(calendar => calendar.id === calendarId)?.color)
+      .filter(Boolean);
+  }
+
+  // ── Sidebar ──────────────────────────────────────────────────────────────
+  function renderSidebar() {
+    calendarList.innerHTML = '';
+    // If token is set, only show token-accessible calendars
+    const visibleCalendars = tokenAllowedCalendars 
+      ? allCalendars.filter(cal => tokenAllowedCalendars.has(cal.id))
+      : allCalendars;
+    
+    for (const [groupName, calendars] of groupCalendars(visibleCalendars)) {
+      const groupHeader = document.createElement('div');
+      groupHeader.className = 'sidebar-section-title';
+      groupHeader.textContent = groupName;
+      calendarList.appendChild(groupHeader);
+
+      for (const cal of calendars) {
+        const item = document.createElement('div');
+        item.className = 'sidebar-cal-item';
+
+        const meta = document.createElement('label');
+        meta.className = 'sidebar-cal-meta';
+
+        const cb = document.createElement('input');
+        cb.type      = 'checkbox';
+        cb.className = 'cal-checkbox';
+        cb.style.setProperty('--cal-color', cal.color);
+        cb.checked   = !hiddenCals.has(cal.id);
+        cb.addEventListener('change', () => {
+          if (cb.checked) hiddenCals.delete(cal.id);
+          else            hiddenCals.add(cal.id);
+          fcCalendar.refetchEvents();
+        });
+
+        const dot = document.createElement('span');
+        dot.className        = 'cal-dot';
+        dot.style.background = cal.color;
+
+        const name = document.createElement('span');
+        name.className   = 'cal-name';
+        name.textContent = cal.name;
+
+        meta.append(cb, dot, name);
+
+        const infoButton = document.createElement('button');
+        infoButton.type = 'button';
+        infoButton.className = 'sidebar-cal-info';
+        infoButton.setAttribute('aria-label', `Open information for ${cal.name}`);
+        infoButton.textContent = 'i';
+        bindCalendarHoverTooltip(infoButton, cal);
+        infoButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          window.location.href = `/calendar-info/${encodeURIComponent(cal.id)}`;
+        });
+
+        item.append(meta, infoButton);
+        calendarList.appendChild(item);
+      }
+    }
+
+    if (!calendarList.__calendarHoverBound) {
+      calendarList.addEventListener('mouseleave', hideCalendarHoverTooltip);
+      calendarList.__calendarHoverBound = true;
+    }
+
+    if (adminNavItem) {
+      adminNavItem.style.display = isAdminUser() ? 'flex' : 'none';
+      adminNavItem.onclick = async () => {
+        setCurrentView('admin');
+        await loadAdminData();
+      };
+    }
+
+    if (accessNavItem) {
+      accessNavItem.style.display = hasValidToken ? 'flex' : 'none';
+      accessNavItem.onclick = async () => {
+        setCurrentView('access');
+        await loadAccessCatalog();
+      };
+    }
+
+    if (sidebarLogo) {
+      sidebarLogo.onclick = () => {
+        setCurrentView('calendar');
+      };
+    }
+
+    if (logoutNavItem) {
+      logoutNavItem.style.display = currentUser ? 'flex' : 'none';
+      logoutNavItem.onclick = async () => {
+        await logoutUser();
+      };
+    }
+
+    if (tokenActionNavItem) {
+      const onTokenPage = isTokenOnlyPage();
+      tokenActionNavItem.style.display = onTokenPage ? 'flex' : 'none';
+      if (onTokenPage) {
+        tokenActionLabel.textContent = currentUser && currentUser.isTokenOnlyAccount
+          ? 'Save to account'
+          : 'Add calendar to account';
+      }
+      tokenActionNavItem.onclick = async () => {
+        await handleTokenPageAction();
+      };
+    }
+  }
+
+  // ── Dialog: recurrence controls ──────────────────────────────────────────
+  function resetRecurrence() {
+    recurEnabled.checked = false;
+    recurFreq.value = 'daily'; recurInterval.value = '1'; recurUntil.value = '';
+    recurFields.style.display = 'none'; recurUntilField.style.display = 'none';
+  }
+  function syncRecurrenceVis() {
+    const on = recurEnabled.checked;
+    recurFields.style.display     = on ? 'grid' : 'none';
+    recurUntilField.style.display = on ? 'grid' : 'none';
+  }
+  recurEnabled.addEventListener('change', syncRecurrenceVis);
+
+  // ── Dialog: open ─────────────────────────────────────────────────────────
+  function openDialog(mode, data) {
+    dialogState.mode    = mode;
+    dialogState.eventId = data.eventId || null;
+    dialogTitle.textContent       = mode === 'create' ? 'Create Event' : 'Edit Event';
+    deleteButton.style.visibility = mode === 'edit' ? 'visible' : 'hidden';
+    const titleParts = splitEventTitle(data.title || '');
+    const oauthUserName = currentUser && !currentUser.isTokenOnlyAccount
+      ? String(currentUser.name || '').trim()
+      : '';
+    titleInput.value    = data.name || titleParts.user || (mode === 'create' ? oauthUserName : '');
+    eventNameInput.value = data.eventTitle || titleParts.eventName;
+    contactInput.value  = data.contact || '';
+    startInput.value    = isoToLocalInput(data.start);
+    endInput.value      = isoToLocalInput(data.end);
+    allDayInput.checked = Boolean(data.allDay);
+    renderCalendarCheckboxes(data.calendarIds || (data.calendarId ? [data.calendarId] : []));
+    resetRecurrence();
+    if (data.recurrence) {
+      recurEnabled.checked = true;
+      recurFreq.value      = data.recurrence.freq     || 'daily';
+      recurInterval.value  = String(data.recurrence.interval || 1);
+      recurUntil.value     = isoToLocalInput(data.recurrence.until);
+    }
+    notesInput.value = data.notes || '';
+    committedInput.checked = Boolean(data.committed);
+    dialogInitialState = captureDialogState();
+    syncRecurrenceVis();
+    dialogSuggestionEvents = [];
+    dialog.showModal();
+    void refreshDialogCalendarAvailability();
+    void refreshDialogEventNameSuggestions();
+  }
+
+  // ── FullCalendar event source ────────────────────────────────────────────
+  async function loadEvents(info, success, failure) {
+    try {
+      const q = new URLSearchParams({
+        start: info.start.toISOString(),
+        end:   info.end.toISOString(),
+      });
+      let events = await request('/api/events?' + q);
+      dialogLoadedEvents = Array.isArray(events) ? events : [];
+      // Filter out calendars the user has hidden via the sidebar
+      if (hiddenCals.size > 0) {
+        events = events.filter(e => {
+          const calendarIds = e.calendarIds || (e.extendedProps && e.extendedProps.calendarIds) || [];
+          return calendarIds.some(cid => !hiddenCals.has(cid));
+        });
+      }
+      success(events);
+      updateDialogCalendarAvailability();
+    } catch (err) { failure(err); }
+  }
+
+  // ── Drag / resize ─────────────────────────────────────────────────────────
+  async function saveMoveOrResize(info) {
+    if (info.event.extendedProps.committed) {
+      const allowOverride = await requestCommittedOverride();
+      if (!allowOverride) {
+        info.revert();
+        showSaveToast(
+          'Move/resize cancelled',
+          'Committed event remained locked'
+        );
+        return;
+      }
+    }
+    if (info.event.extendedProps.isRecurring) {
+      info.revert();
+      showSaveToast(
+        'Drag/resize disabled',
+        'Edit the series instead of individual recurring instances'
+      );
+      return;
+    }
+    try {
+      await request('/api/events/' + info.event.id, 'PUT', {
+        start:  info.event.start ? info.event.start.toISOString() : null,
+        end:    info.event.end   ? info.event.end.toISOString()   : null,
+        allDay: info.event.allDay,
+      });
+      showSaveToast('Event updated', info.event.title ? `"${info.event.title}" moved and saved` : 'Changes saved to server');
+    } catch (err) {
+      info.revert();
+      if (showOverlapPopupIfNeeded(err.message, info.event.extendedProps.calendarIds || [])) return;
+      showSaveToast('Update failed', err.message);
+    }
+  }
+
+  // ── FullCalendar initialisation ───────────────────────────────────────────
+  const fcCalendar = new FullCalendar.Calendar(mountNode, {
+    initialView: 'timeGridWeek',
+    height: 'auto',
+    nowIndicator: true,
+    editable: true,
+    selectable: true,
+    eventResizableFromStart: true,
+    headerToolbar: {
+      left:   'prev,next today',
+      center: 'title',
+      right:  'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+    },
+    events: loadEvents,
+    select: function(sel) {
+      // Pre-select the first visible calendar
+      const first = allCalendars.find(c => !hiddenCals.has(c.id));
+      openDialog('create', {
+        title: '',
+        start:      sel.start.toISOString(),
+        end:        sel.end ? sel.end.toISOString() : null,
+        allDay:     sel.allDay,
+        calendarId: first ? first.id : null,
+        calendarIds: first ? [first.id] : [],
+        recurrence: null,
+        notes: '',
+        committed: false,
+      });
+      fcCalendar.unselect();
+    },
+    eventClick: async function(clickInfo) {
+      try {
+        const seriesId = clickInfo.event.extendedProps.seriesId || clickInfo.event.id;
+        const ev = await request('/api/events/' + seriesId);
+        openDialog('edit', {
+          eventId:    seriesId,
+          title:      ev.title,
+          name:       ev.name,
+          eventTitle: ev.eventTitle,
+          contact:    ev.contact,
+          start:      ev.start,
+          end:        ev.end,
+          allDay:     ev.allDay,
+          calendarId: ev.calendarId,
+          calendarIds: ev.calendarIds || (ev.calendarId ? [ev.calendarId] : []),
+          recurrence: ev.recurrence,
+          notes:      ev.notes || '',
+          committed:  Boolean(ev.committed),
+        });
+      } catch (err) {
+        showErrorToast('Unable to open event', err.message);
+      }
+    },
+    eventDrop:   saveMoveOrResize,
+    eventResize: saveMoveOrResize,
+    eventDidMount: function(info) {
+      const calendarIds = info.event.extendedProps.calendarIds
+        || (info.event.extendedProps.calendarId ? [info.event.extendedProps.calendarId] : []);
+      const calendarColors = visibleCalendarColors(calendarIds);
+      if (calendarColors.length > 1) {
+        const stripeWidth = 10;
+        const stops = calendarColors.map((color, index) => {
+          const start = index * stripeWidth;
+          const end = (index + 1) * stripeWidth;
+          return `${color} ${start}px ${end}px`;
+        });
+        info.el.style.backgroundImage = `repeating-linear-gradient(45deg, ${stops.join(', ')})`;
+        info.el.style.backgroundColor = calendarColors[0];
+        info.el.style.borderColor = calendarColors[0];
+        info.el.style.color = '#fff';
+      } else {
+        info.el.style.backgroundImage = '';
+        if (calendarColors.length === 1) {
+          info.el.style.backgroundColor = calendarColors[0];
+          info.el.style.borderColor = calendarColors[0];
+        }
+      }
+
+      const titleEl = info.el.querySelector('.fc-event-title');
+      const isCommitted = Boolean(info.event.extendedProps.committed);
+      if (titleEl) {
+        const existingLock = titleEl.querySelector('.event-lock-icon');
+        if (existingLock) existingLock.remove();
+        if (isCommitted) {
+          const lockIcon = document.createElement('span');
+          lockIcon.className = 'event-lock-icon';
+          lockIcon.textContent = '🔒';
+          titleEl.prepend(lockIcon);
+        }
+      }
+
+      const notes = String(info.event.extendedProps.notes || '').trim();
+      if (notes) {
+        const positionTooltip = (event) => {
+          const offset = 14;
+          const maxX = window.innerWidth - eventNotesTooltip.offsetWidth - 8;
+          const maxY = window.innerHeight - eventNotesTooltip.offsetHeight - 8;
+          const nextX = Math.min(maxX, event.clientX + offset);
+          const nextY = Math.min(maxY, event.clientY + offset);
+          eventNotesTooltip.style.left = `${Math.max(8, nextX)}px`;
+          eventNotesTooltip.style.top = `${Math.max(8, nextY)}px`;
+        };
+
+        info.el.addEventListener('mouseenter', event => {
+          eventNotesTooltip.textContent = notes;
+          eventNotesTooltip.style.display = 'block';
+          positionTooltip(event);
+        });
+        info.el.addEventListener('mousemove', positionTooltip);
+        info.el.addEventListener('mouseleave', () => {
+          eventNotesTooltip.style.display = 'none';
+        });
+      }
+    },
+  });
+
+  let calendarRendered = false;
+
+  function ensureCalendarLoaded() {
+    if (!calendarRendered) {
+      fcCalendar.render();
+      calendarRendered = true;
+    } else {
+      fcCalendar.updateSize();
+    }
+    fcCalendar.refetchEvents();
+  }
+
+  window.addEventListener('pageshow', () => {
+    if (hasValidToken) ensureCalendarLoaded();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && hasValidToken) ensureCalendarLoaded();
+  });
+
+  // ── Dialog button listeners ───────────────────────────────────────────────
+  cancelButton.addEventListener('click', () => dialog.close());
+  overlapOkButton.addEventListener('click', () => overlapDialog.close());
+  startInput.addEventListener('input', scheduleDialogCalendarAvailabilityRefresh);
+  startInput.addEventListener('change', scheduleDialogCalendarAvailabilityRefresh);
+  endInput.addEventListener('input', scheduleDialogCalendarAvailabilityRefresh);
+  endInput.addEventListener('change', scheduleDialogCalendarAvailabilityRefresh);
+  if (groupCreateResourceCancel) {
+    groupCreateResourceCancel.addEventListener('click', () => closeGroupResourceCreateDialog(false));
+  }
+  if (groupCreateResourceConfirm) {
+    groupCreateResourceConfirm.addEventListener('click', () => closeGroupResourceCreateDialog(true));
+  }
+  if (groupCreateResourceDialog) {
+    groupCreateResourceDialog.addEventListener('close', () => {
+      if (pendingGroupResourceCreateResolve) {
+        closeGroupResourceCreateDialog(false);
+      }
+    });
+  }
+
+  saveButton.addEventListener('click', async function() {
+    const dialogDirty = dialogStateChangedSinceOpen();
+    const allowCommittedOverride = await confirmCommittedEditIfNeeded(dialogDirty);
+    if (!allowCommittedOverride) {
+      return;
+    }
+
+    const userName = titleInput.value.trim();
+    const eventName = eventNameInput.value.trim();
+    const contact = contactInput.value.trim();
+    const title = combineEventTitle(userName, eventName);
+    const startIso = localToIso(startInput.value);
+    const endIso   = localToIso(endInput.value);
+    const calendarIds = getSelectedCalendarIds();
+    const notes = notesInput.value;
+    const committed = committedInput.checked;
+
+    if (!title)    { showErrorToast('Validation error', 'User or Event Name is required.', dialog); return; }
+    if (!startIso) { showErrorToast('Validation error', 'Start date/time is required.', dialog); return; }
+    if (calendarIds.length === 0) {
+      showErrorToast('Validation error', 'Select at least one calendar.', dialog);
+      return;
+    }
+    if (endIso && endIso < startIso) {
+      showErrorToast('Validation error', 'End must be after start.', dialog); return;
+    }
+
+    let recurrencePayload = null;
+    if (recurEnabled.checked) {
+      const iv = Number.parseInt(recurInterval.value || '1', 10);
+      if (!Number.isInteger(iv) || iv < 1) {
+        showErrorToast('Validation error', 'Recurrence interval must be at least 1.', dialog); return;
+      }
+      recurrencePayload = {
+        freq:     recurFreq.value,
+        interval: iv,
+        until:    localToIso(recurUntil.value),
+      };
+    }
+
+    const payload = {
+      title,
+      name: userName,
+      eventTitle: eventName,
+      contact,
+      start:      startIso,
+      end:        endIso,
+      allDay:     allDayInput.checked,
+      calendarId: calendarIds[0],
+      calendarIds,
+      recurrence: recurrencePayload,
+      notes,
+      committed,
+    };
+
+    saveButton.disabled = true;
+    try {
+      if (dialogState.mode === 'create') {
+        await request('/api/events', 'POST', payload);
+        showSaveToast('Event created', `"${title}" saved to server`);
+      } else {
+        await request('/api/events/' + dialogState.eventId, 'PUT', payload);
+        showSaveToast('Event updated', `"${title}" saved to server`);
+      }
+      dialog.close();
+      fcCalendar.refetchEvents();
+    } catch (err) {
+      if (showOverlapPopupIfNeeded(err.message, calendarIds)) return;
+      showErrorToast('Save failed', err.message, dialog);
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+
+  deleteButton.addEventListener('click', async function() {
+    if (dialogState.mode !== 'edit' || !dialogState.eventId) return;
+    if (!window.confirm('Delete this event?')) return;
+    deleteButton.disabled = true;
+    try {
+      await request('/api/events/' + dialogState.eventId, 'DELETE');
+      showSaveToast('Event deleted', 'Removed and saved to server');
+      dialog.close();
+      fcCalendar.refetchEvents();
+    } catch (err) {
+      showErrorToast('Delete failed', err.message);
+    } finally {
+      deleteButton.disabled = false;
+    }
+  });
+
+  // ── Boot: require a valid token before fetching protected scheduler data ──
+  connectCalendarUpdatesSocket();
+
+  // Guard against multiple bootstrap initializations
+  if (window.__bootstrapRunning) {
+    console.log('[BOOTSTRAP] Bootstrap already running, skipping re-initialization');
+    return;
+  }
+  window.__bootstrapRunning = true;
+  console.log('[BOOTSTRAP] Starting bootstrap initialization');
+
+  // Check for token in URL parameter first
+  if (!currentToken) {
+    // No URL token - check if user has a valid session cookie
+    console.log('[BOOTSTRAP] No URL token, checking for session cookie');
+    fetch('/api/auth/check-session', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(sessionData => {
+        if (sessionData && sessionData.authenticated && sessionData.token) {
+          // User has a valid session - use the session token
+          console.log('[BOOTSTRAP] Valid session found, using session token');
+          currentToken = sessionData.apiToken || sessionData.token;
+          setPersistedAuthToken(currentToken);
+          currentUser = sessionData.user;
+          authenticatedSessionToken = sessionData.apiToken || sessionData.token;
+          syncUserIdInUrl(currentUser);
+          loadAppWithToken(currentToken);
+        } else {
+          const persistedToken = getPersistedAuthToken();
+          if (persistedToken) {
+            console.log('[BOOTSTRAP] No session, retrying with persisted token');
+            currentToken = persistedToken;
+            loadAppWithToken(currentToken);
+          } else {
+            // No valid session - show landing screen
+            console.log('[BOOTSTRAP] No valid session, showing landing screen');
+            showLandingScreen();
+            if (window.__revealPage) window.__revealPage();
+          }
+        }
+      })
+      .catch(err => {
+        console.warn('[BOOTSTRAP] Session check failed:', err);
+        showLandingScreen();
+        if (window.__revealPage) window.__revealPage();
+      });
+    return;
+  }
+
+  // URL token present — validate silently (keep page hidden) to avoid a
+  // flash of the landing screen during the round-trip to the server.
+  console.log('[BOOTSTRAP] URL token present:', currentToken);
+  getSessionUser()
+    .then(sessionData => {
+      if (sessionData && sessionData.user && sessionData.token) {
+        currentUser = sessionData.user;
+        syncUserIdInUrl(currentUser);
+      }
+      loadAppWithToken(currentToken);
+    })
+    .catch(() => loadAppWithToken(currentToken));
+
+  async function loadAppWithToken(token) {
+    try {
+      let apiToken = token;
+      if (!isJwtToken(apiToken)) {
+        const validation = await request(
+          '/api/token/validate/' + encodeURIComponent(apiToken),
+          'GET',
+          null,
+          false,
+        );
+        if (!validation.valid) {
+          throw new Error('Invalid or expired token.');
+        }
+        apiToken = validation.apiToken || apiToken;
+      }
+
+      const [cals, session] = await Promise.all([
+        request('/api/calendars?token=' + encodeURIComponent(apiToken), 'GET', null, false),
+        request('/api/session/user?token=' + encodeURIComponent(apiToken), 'GET', null, false),
+      ]);
+      
+      currentToken = apiToken;
+      setPersistedAuthToken(apiToken);
+      tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
+      hasValidToken = true;
+      currentUser = session && session.authenticated ? session.user : currentUser;
+      syncUserIdInUrl(currentUser);
+      allCalendars = cals;
+
+      if (currentUser && currentUser.id) {
+        const pendingToken = localStorage.getItem('pendingTokenToClaim');
+        const pendingCalendarIdsRaw = localStorage.getItem('pendingCalendarIdsToClaim');
+        let pendingCalendarIds = [];
+        if (pendingCalendarIdsRaw) {
+          try {
+            const parsedCalendarIds = JSON.parse(pendingCalendarIdsRaw);
+            if (Array.isArray(parsedCalendarIds)) {
+              pendingCalendarIds = parsedCalendarIds.filter(calendarId => typeof calendarId === 'string' && calendarId.trim());
+            }
+          } catch (error) {
+            console.warn('[BOOTSTRAP] Invalid pending calendar claim payload:', error);
+          }
+        }
+        const tokenToClaim = token && !isJwtToken(token) && token !== authenticatedSessionToken ? token : pendingToken;
+        if (tokenToClaim || pendingCalendarIds.length > 0) {
+          if (tokenToClaim === pendingToken) {
+            console.log('[BOOTSTRAP] Claiming pending token after OAuth:', pendingToken);
+            localStorage.removeItem('pendingTokenToClaim');
+          } else {
+            console.log('[BOOTSTRAP] Claiming URL token for authenticated user:', tokenToClaim);
+          }
+
+          await claimTokenResourcesForLoggedInUser(tokenToClaim || currentToken, pendingCalendarIds.length > 0 ? pendingCalendarIds : null);
+          if (pendingCalendarIds.length > 0) {
+            localStorage.removeItem('pendingCalendarIdsToClaim');
+          }
+          // Only redirect if we have a URL token to clean up
+          if (token && !isJwtToken(token) && token !== authenticatedSessionToken) {
+            redirectToUserOnlyUrl(currentUser);
+          }
+        }
+      }
+      
+      showAppShell();
+      renderSidebar();
+      void loadAccessCatalog();
+      ensureCalendarLoaded();
+      if (window.__revealPage) window.__revealPage();
+    } catch (err) {
+      console.error('[BOOTSTRAP] Token validation or protected data load failed:', err);
+      hasValidToken = false;
+      currentUser = null;
+      clearPersistedAuthToken();
+      syncUserIdInUrl(null);
+      tokenAllowedCalendars = null;
+      hiddenCals = new Set();
+      showLandingScreen({ invalidToken: true, attemptedToken: token });
+      if (window.__revealPage) window.__revealPage();
+    }
+  }
+})();
+</script>
+    ''')
+
