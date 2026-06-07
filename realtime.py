@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from auth import _get_token_allowed_calendars, _get_token_owner_user_id
+from auth import _get_login_or_api_token_allowed_calendars, _get_login_or_api_token_owner_user_id
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
@@ -23,11 +23,14 @@ async def ws_calendar_updates(websocket: WebSocket) -> None:
     await websocket.accept()
 
     token = None
-    if websocket.query_params:
-        token = websocket.query_params.get('token')
+    authorization = (websocket.headers.get('authorization') or '').strip()
+    if authorization.lower().startswith('bearer '):
+        token = authorization[7:].strip() or None
+    if not token:
+        token = websocket.cookies.get('session_token') if websocket.cookies else None
 
-    allowed_calendars = _get_token_allowed_calendars(token) if token else set()
-    user_id = _get_token_owner_user_id(token) if token else None
+    allowed_calendars = _get_login_or_api_token_allowed_calendars(token) if token else set()
+    user_id = _get_login_or_api_token_owner_user_id(token) if token else None
 
     with WS_CLIENTS_LOCK:
         WS_CLIENT_INFO[websocket] = {
@@ -133,6 +136,13 @@ async def _broadcast_user_resources_updated(user_id: str) -> None:
     for websocket, info in clients_info:
         if info.get('user_id') != user_id:
             continue
+        token = info.get('token')
+        if token:
+            refreshed_allowed_calendars = _get_login_or_api_token_allowed_calendars(token)
+            with WS_CLIENTS_LOCK:
+                current_info = WS_CLIENT_INFO.get(websocket)
+                if current_info is not None:
+                    current_info['allowed_calendars'] = refreshed_allowed_calendars
         try:
             await websocket.send_json(message)
         except Exception:

@@ -30,6 +30,7 @@ import ui as app_ui  # noqa: F401  (side-effect: registers @ui.page('/'))
 
 # ── Startup hooks ─────────────────────────────────────────────────────────────
 from database import init_db
+from config import TRUSTED_PROXY_IPS
 
 
 @app.on_startup
@@ -50,4 +51,12 @@ async def _capture_server_loop() -> None:
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
-ui.run(title='NiceGUI FullCalendar App', host='0.0.0.0', port=8080, reload=False, show=False)
+ui.run(
+    title='NiceGUI FullCalendar App',
+    host='0.0.0.0',
+    port=777,
+    reload=False,
+    show=False,
+    proxy_headers=True,
+    forwarded_allow_ips=','.join(sorted(TRUSTED_PROXY_IPS)) or '127.0.0.1',
+)

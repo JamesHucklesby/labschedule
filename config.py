@@ -18,8 +18,19 @@ GOOGLE_OAUTH_SCOPES = [
 ]
 
 # ── App ───────────────────────────────────────────────────────────────────────
-APP_SECRET_KEY = os.getenv('APP_SECRET_KEY', 'dev-secret-key-change-in-production')
+_DEFAULT_APP_SECRET_KEY = 'dev-secret-key-change-in-production'
+APP_SECRET_KEY = os.getenv('APP_SECRET_KEY', _DEFAULT_APP_SECRET_KEY)
 APP_BASE_URL = os.getenv('APP_BASE_URL', 'http://localhost:8080').strip().rstrip('/')
+APP_ENV = os.getenv('APP_ENV', 'development').strip().lower()
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'auto').strip().lower()
+TRUSTED_PROXY_IPS = {
+    ip.strip()
+    for ip in os.getenv('TRUSTED_PROXY_IPS', '127.0.0.1,::1').split(',')
+    if ip.strip()
+}
+
+if APP_ENV in {'production', 'prod'} and APP_SECRET_KEY == _DEFAULT_APP_SECRET_KEY:
+    raise RuntimeError('APP_SECRET_KEY must be set to a strong secret in production.')
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv('DATABASE_URL', '').strip() or None

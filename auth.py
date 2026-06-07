@@ -29,6 +29,7 @@ from config import (
     OAUTH_STATE_TTL_SECONDS,
     TOKEN_RATE_LIMIT_MAX_REQUESTS,
     TOKEN_RATE_LIMIT_WINDOW_SECONDS,
+    TRUSTED_PROXY_IPS,
 )
 from database import _db_session
 from models import CalendarGroupLinkORM, CalendarORM, GroupUserLinkORM, UserCalendarLinkORM, UserORM
@@ -229,6 +230,32 @@ def _get_token_owner_user_id(token: str | None) -> str | None:
     return _resolve_user_id_from_api_token(token)
 
 
+def _get_login_or_api_token_allowed_calendars(token: str | None) -> set[str] | None:
+    if not token:
+        return None
+    try:
+        token = _sanitize_token_input(token)
+    except HTTPException:
+        return None
+    with _db_session() as session:
+        user_id = _resolve_user_id_from_login_or_api_token(session, token)
+        if not user_id:
+            return None
+        return _get_user_allowed_calendars(session, user_id)
+
+
+def _get_login_or_api_token_owner_user_id(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        token = _sanitize_token_input(token)
+    except HTTPException:
+        return None
+    with _db_session() as session:
+        user_id = _resolve_user_id_from_login_or_api_token(session, token)
+        return str(user_id) if user_id else None
+
+
 def _validate_token_access(token: str | None, calendar_ids: list[str]) -> None:
     if not token:
         raise HTTPException(status_code=403, detail='Token is required.')
@@ -334,12 +361,11 @@ TOKEN_RATE_LIMIT_BY_IP: dict[str, deque[float]] = {}
 
 
 def _client_ip_address(request: Request) -> str:
+    remote_ip = request.client.host if request.client and request.client.host else 'unknown'
     forwarded_for = request.headers.get('x-forwarded-for', '').strip()
-    if forwarded_for:
+    if forwarded_for and remote_ip in TRUSTED_PROXY_IPS:
         return forwarded_for.split(',')[0].strip() or 'unknown'
-    if request.client and request.client.host:
-        return request.client.host
-    return 'unknown'
+    return remote_ip
 
 
 def _enforce_token_validation_rate_limit(client_ip: str) -> None:

@@ -221,7 +221,7 @@ def calendar_info_page(calendar_id: str) -> None:
 
 @ui.page('/calendar-edit/{calendar_id}')
 def calendar_editor_page(calendar_id: str, request: Request) -> None:
-    session_token = request.cookies.get('session_token') or request.query_params.get('token')
+    session_token = request.cookies.get('session_token')
     current_user = _session_user_for_login_or_api_token(session_token)
     calendar_id = _sanitize_id_input(calendar_id, 'calendar_id')
 
@@ -528,10 +528,6 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
           }};
 
           const resolveAdminToken = async () => {{
-            const urlToken = new URLSearchParams(window.location.search).get('token') || '';
-            if (urlToken) {{
-              return urlToken;
-            }}
             if (sessionToken) {{
               return sessionToken;
             }}
@@ -546,7 +542,7 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
               }}
               const sessionData = await response.json().catch(() => null);
               return sessionData && sessionData.authenticated
-                ? String(sessionData.apiToken || sessionData.token || '')
+                ? String(sessionData.apiToken || '')
                 : '';
             }} catch {{
               return '';
@@ -582,10 +578,8 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
             status.textContent = 'Uploading image...';
             imageUploadButton.disabled = true;
             try {{
-              const adminToken = await resolveAdminToken();
-              const uploadPath = adminToken
-                ? `/api/admin/calendars/${{encodeURIComponent(calendarId)}}/image?token=${{encodeURIComponent(adminToken)}}`
-                : `/api/admin/calendars/${{encodeURIComponent(calendarId)}}/image`;
+              await resolveAdminToken();
+              const uploadPath = `/api/admin/calendars/${{encodeURIComponent(calendarId)}}/image`;
               const formData = new FormData();
               formData.append('file', selectedFile);
               const response = await fetch(uploadPath, {{
@@ -641,10 +635,8 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
             status.textContent = 'Saving...';
             saveButton.disabled = true;
             try {{
-              const adminToken = await resolveAdminToken();
-              const adminPath = adminToken
-                ? `/api/admin/calendars/${{encodeURIComponent(calendarId)}}?token=${{encodeURIComponent(adminToken)}}`
-                : `/api/admin/calendars/${{encodeURIComponent(calendarId)}}`;
+              await resolveAdminToken();
+              const adminPath = `/api/admin/calendars/${{encodeURIComponent(calendarId)}}`;
               const response = await fetch(adminPath, {{
                 method: 'PUT',
                 credentials: 'include',
@@ -2264,63 +2256,33 @@ def index() -> None:
   let   niceguiConnected = true;   // tracks NiceGUI socket.io connection state
   let   lastCalendarChangeAt = null;
   let   wsInputBlocked = false;
-  const AUTH_TOKEN_STORAGE_KEY = 'labSchedulerAuthToken';
-  const PRESERVED_LINK_TOKEN_STORAGE_KEY = 'labSchedulerPreservedLinkToken';
   const recentLocalChangeIds = new Map();
   const CLIENT_INSTANCE_ID = (window.crypto && window.crypto.randomUUID)
     ? window.crypto.randomUUID()
     : `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   function setPersistedAuthToken(token) {
-    if (!token) return;
-    try {
-      localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-    } catch {
-      // Ignore storage failures (private mode, quota, etc.)
-    }
+    return;
   }
 
   function getPersistedAuthToken() {
-    try {
-      const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-      return token ? token.trim() : null;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   function clearPersistedAuthToken() {
-    try {
-      localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-    } catch {
-      // Ignore storage failures
-    }
+    return;
   }
 
   function setPreservedLinkToken(token) {
-    if (!token) return;
-    try {
-      localStorage.setItem(PRESERVED_LINK_TOKEN_STORAGE_KEY, token);
-    } catch {
-      // Ignore storage failures
-    }
+    return;
   }
 
   function getPreservedLinkToken() {
-    try {
-      const token = localStorage.getItem(PRESERVED_LINK_TOKEN_STORAGE_KEY);
-      return token ? token.trim() : null;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   function clearPreservedLinkToken() {
-    try {
-      localStorage.removeItem(PRESERVED_LINK_TOKEN_STORAGE_KEY);
-    } catch {
-      // Ignore storage failures
-    }
+    return;
   }
 
   function formatDuration(milliseconds) {
@@ -2644,20 +2606,10 @@ def index() -> None:
           if (normalized) {
             currentToken = normalized;
             tokenAccessRequested = !isJwtToken(normalized);
-            if (tokenAccessRequested) {
-              setPreservedLinkToken(normalized);
-            }
-            setPersistedAuthToken(normalized);
             return;
           }
         }
       }
-    }
-
-    const persistedToken = getPersistedAuthToken();
-    if (persistedToken) {
-      currentToken = persistedToken;
-      tokenAccessRequested = !isJwtToken(persistedToken);
     }
   })();
 
@@ -2859,17 +2811,9 @@ def index() -> None:
   const API_TIMEOUT_MS = 12000;
 
   async function request(path, method = 'GET', body = null, includeToken = true) {
-    // Include token as query parameter if available.
-    // Fall back to the URL if currentToken is not yet set in memory.
     let token = null;
-    let preservedToken = null;
     if (includeToken) {
       token = currentToken;
-      if (!token) {
-        const _p = new URLSearchParams(window.location.search);
-        token = _p.get('token') || _p.get('link') || null;
-      }
-      preservedToken = getPreservedLinkToken();
     }
     const buildFullPath = (candidateToken) => {
       const separator = path.includes('?') ? '&' : '?';
@@ -2920,19 +2864,6 @@ def index() -> None:
     if (!res.ok) {
       const p = await res.json().catch(() => ({ detail: 'Request failed' }));
       const detail = String(p.detail || 'Request failed');
-      const shouldRetryWithPreservedToken = includeToken
-        && preservedToken
-        && preservedToken !== token
-        && detail.includes('Token does not permit access to this calendar.');
-      if (shouldRetryWithPreservedToken) {
-        const retryPath = buildFullPath(preservedToken);
-        res = await fetch(retryPath, opts);
-        if (!res.ok) {
-          const retryPayload = await res.json().catch(() => ({ detail: 'Request failed' }));
-          throw new Error(retryPayload.detail || 'Request failed');
-        }
-        return res.status === 204 ? null : res.json();
-      }
       throw new Error(detail);
     }
     return res.status === 204 ? null : res.json();
@@ -2979,9 +2910,7 @@ def index() -> None:
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = currentToken
-      ? `${protocol}//${window.location.host}/ws/calendar-updates?token=${encodeURIComponent(currentToken)}`
-      : `${protocol}//${window.location.host}/ws/calendar-updates`;
+    const wsUrl = `${protocol}//${window.location.host}/ws/calendar-updates`;
     const socket = new WebSocket(wsUrl);
     updatesSocket = socket;
     updatesConnectionState = 'connecting';
@@ -3535,7 +3464,7 @@ def index() -> None:
   }
 
   function getAdminEditorToken() {
-    return currentToken || authenticatedSessionToken || getPersistedAuthToken() || '';
+    return currentToken || authenticatedSessionToken || '';
   }
 
   function isAdminUser() {
@@ -3594,9 +3523,23 @@ def index() -> None:
     if (!response.ok) return null;
     const sessionData = await response.json();
     authenticatedSessionToken = sessionData && sessionData.authenticated
-      ? (sessionData.apiToken || sessionData.token)
+      ? (sessionData.apiToken || null)
       : null;
     return sessionData && sessionData.authenticated ? sessionData : null;
+  }
+
+  async function preservePendingLinkForOauth(linkToken, calendarIds = null) {
+    if (!linkToken || isJwtToken(linkToken)) return;
+    const payload = { token: linkToken };
+    if (Array.isArray(calendarIds)) {
+      payload.calendarIds = calendarIds;
+    }
+    await fetch('/auth/preserve-link-token', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
   }
 
   function redirectToUserOnlyUrl(user) {
@@ -3610,33 +3553,21 @@ def index() -> None:
     const calendarIdsToClaim = getTokenPageCalendarIdsToClaim();
     const sessionUser = currentUser && currentUser.id ? currentUser : null;
     const hasAuthenticatedSession = Boolean(sessionUser && authenticatedSessionToken);
-    const sessionData = hasAuthenticatedSession ? { user: sessionUser, token: authenticatedSessionToken } : await getSessionUser();
+    const sessionData = hasAuthenticatedSession ? { user: sessionUser, apiToken: authenticatedSessionToken } : await getSessionUser();
 
-    if (sessionData && sessionData.user && sessionData.token) {
+    if (sessionData && sessionData.user && sessionData.apiToken) {
       // Session exists - save the current calendar selection to the account.
       try {
         currentUser = sessionData.user;
         syncUserIdInUrl(currentUser);
-        if (calendarIdsToClaim.length > 0) {
-          localStorage.setItem('pendingCalendarIdsToClaim', JSON.stringify(calendarIdsToClaim));
-        } else {
-          localStorage.removeItem('pendingCalendarIdsToClaim');
-        }
         const claimResult = await claimTokenResourcesForLoggedInUser(currentToken, calendarIdsToClaim);
-        clearPersistedAuthToken();
-        localStorage.removeItem('pendingTokenToClaim');
-        localStorage.removeItem('pendingCalendarIdsToClaim');
         redirectToUserOnlyUrl({ id: claimResult?.userId || currentUser.id });
         showSaveToast('Calendar updated', 'Calendar added to your account');
       } catch (error) {
         showErrorToast('Save failed', error.message);
       }
     } else {
-      if (calendarIdsToClaim.length > 0) {
-        localStorage.setItem('pendingCalendarIdsToClaim', JSON.stringify(calendarIdsToClaim));
-      } else {
-        localStorage.removeItem('pendingCalendarIdsToClaim');
-      }
+      await preservePendingLinkForOauth(currentToken, calendarIdsToClaim);
       // No session token - redirect to login
       window.location.href = '/auth/google-login';
     }
@@ -4889,12 +4820,14 @@ def index() -> None:
       tokenAllowedCalendars = new Set(validation.calendarIds || []);
       hasValidToken = true;
       currentUser = session && session.authenticated ? session.user : null;
-      setPersistedAuthToken(currentToken || value);
       syncUserIdInUrl(currentUser);
       allCalendars = cals;
-      // Persist token in URL without triggering a reload.
+      // Remove shared-link tokens from the URL after successful validation.
       const url = new URL(window.location.href);
-      url.searchParams.set('token', value);
+      url.searchParams.delete('token');
+      url.searchParams.delete('link');
+      url.searchParams.delete('tokens');
+      url.searchParams.delete('links');
       if (currentUser && currentUser.id) {
         url.searchParams.set('user_id', currentUser.id);
       }
@@ -4930,10 +4863,10 @@ def index() -> None:
           const sessionResponse = await fetch('/api/auth/check-session', sessionCheckOpts);
           if (sessionResponse.ok) {
             const sessionData = await sessionResponse.json();
-            if (sessionData.authenticated && sessionData.token) {
+            if (sessionData.authenticated && sessionData.apiToken) {
               // User has a valid session - use it to authenticate
               console.log('[LOGIN] Valid session found, authenticating with persisted token');
-              const sessionToken = sessionData.apiToken || sessionData.token;
+              const sessionToken = sessionData.apiToken;
               const urlToken = currentToken; // Token from URL parameter (if any)
               
               currentToken = sessionToken;
@@ -4957,8 +4890,8 @@ def index() -> None:
                 console.error('[LOGIN] Failed to load calendars with persisted session:', error);
                 // Fall through to OAuth as fallback
                 if (urlToken) {
-                  console.log('[LOGIN] Storing URL token before OAuth redirect:', urlToken);
-                  localStorage.setItem('pendingTokenToClaim', urlToken);
+                  console.log('[LOGIN] Preserving URL token before OAuth redirect');
+                  await preservePendingLinkForOauth(urlToken);
                 }
                 window.location.href = '/auth/google-login';
                 return;
@@ -4980,8 +4913,8 @@ def index() -> None:
         
         // No valid session - proceed with OAuth flow
         if (currentToken) {
-          console.log('[LOGIN] Storing currentToken before OAuth redirect:', currentToken);
-          localStorage.setItem('pendingTokenToClaim', currentToken);
+          console.log('[LOGIN] Preserving current link token before OAuth redirect');
+          await preservePendingLinkForOauth(currentToken);
         }
         window.location.href = '/auth/google-login';
       };
@@ -5481,27 +5414,19 @@ def index() -> None:
     })
       .then(res => res.ok ? res.json() : null)
       .then(sessionData => {
-        if (sessionData && sessionData.authenticated && sessionData.token) {
+        if (sessionData && sessionData.authenticated && sessionData.apiToken) {
           // User has a valid session - use the session token
           console.log('[BOOTSTRAP] Valid session found, using session token');
-          currentToken = sessionData.apiToken || sessionData.token;
-          setPersistedAuthToken(currentToken);
+          currentToken = sessionData.apiToken;
           currentUser = sessionData.user;
-          authenticatedSessionToken = sessionData.apiToken || sessionData.token;
+          authenticatedSessionToken = sessionData.apiToken;
           syncUserIdInUrl(currentUser);
           loadAppWithToken(currentToken);
         } else {
-          const persistedToken = getPersistedAuthToken();
-          if (persistedToken) {
-            console.log('[BOOTSTRAP] No session, retrying with persisted token');
-            currentToken = persistedToken;
-            loadAppWithToken(currentToken);
-          } else {
-            // No valid session - show landing screen
-            console.log('[BOOTSTRAP] No valid session, showing landing screen');
-            showLandingScreen();
-            if (window.__revealPage) window.__revealPage();
-          }
+          // No valid session - show landing screen
+          console.log('[BOOTSTRAP] No valid session, showing landing screen');
+          showLandingScreen();
+          if (window.__revealPage) window.__revealPage();
         }
       })
       .catch(err => {
@@ -5517,7 +5442,7 @@ def index() -> None:
   console.log('[BOOTSTRAP] URL token present:', currentToken);
   getSessionUser()
     .then(sessionData => {
-      if (sessionData && sessionData.user && sessionData.token) {
+      if (sessionData && sessionData.user && sessionData.apiToken) {
         currentUser = sessionData.user;
         syncUserIdInUrl(currentUser);
       }
@@ -5547,7 +5472,6 @@ def index() -> None:
       ]);
       
       currentToken = apiToken;
-      setPersistedAuthToken(apiToken);
       tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
       hasValidToken = true;
       currentUser = session && session.authenticated ? session.user : currentUser;
@@ -5555,7 +5479,6 @@ def index() -> None:
       allCalendars = cals;
 
       if (currentUser && currentUser.id) {
-        const pendingToken = localStorage.getItem('pendingTokenToClaim');
         const pendingCalendarIdsRaw = localStorage.getItem('pendingCalendarIdsToClaim');
         let pendingCalendarIds = [];
         if (pendingCalendarIdsRaw) {
@@ -5568,12 +5491,9 @@ def index() -> None:
             console.warn('[BOOTSTRAP] Invalid pending calendar claim payload:', error);
           }
         }
-        const tokenToClaim = token && !isJwtToken(token) && token !== authenticatedSessionToken ? token : pendingToken;
+        const tokenToClaim = token && !isJwtToken(token) && token !== authenticatedSessionToken ? token : null;
         if (tokenToClaim || pendingCalendarIds.length > 0) {
-          if (tokenToClaim === pendingToken) {
-            console.log('[BOOTSTRAP] Claiming pending token after OAuth:', pendingToken);
-            localStorage.removeItem('pendingTokenToClaim');
-          } else {
+          if (tokenToClaim) {
             console.log('[BOOTSTRAP] Claiming URL token for authenticated user:', tokenToClaim);
           }
 
@@ -5597,7 +5517,6 @@ def index() -> None:
       console.error('[BOOTSTRAP] Token validation or protected data load failed:', err);
       hasValidToken = false;
       currentUser = null;
-      clearPersistedAuthToken();
       syncUserIdInUrl(null);
       tokenAllowedCalendars = null;
       hiddenCals = new Set();

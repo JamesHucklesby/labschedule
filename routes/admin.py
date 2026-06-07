@@ -74,6 +74,27 @@ def _group_names_for_calendar_ids(session, calendar_ids: list[str]) -> list[str]
     return [group_name for group_name in group_names if group_name]
 
 
+def _approved_user_ids_for_group(session, group_name: str) -> list[str]:
+    user_ids = session.scalars(
+        select(GroupUserLinkORM.user_id)
+        .where(GroupUserLinkORM.group_name == group_name)
+        .where(GroupUserLinkORM.status == 'approved')
+        .distinct()
+        .order_by(GroupUserLinkORM.user_id.asc())
+    ).all()
+    return [str(user_id) for user_id in user_ids if user_id]
+
+
+def _publish_user_resource_updates(user_ids: list[str]) -> None:
+    seen: set[str] = set()
+    for user_id in user_ids:
+        normalized = str(user_id or '').strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        _publish_user_resources_updated(normalized)
+
+
 def _user_calendar_link(session, user_id: str, calendar_id: str) -> UserCalendarLinkORM | None:
     return session.get(UserCalendarLinkORM, (user_id, calendar_id))
 
@@ -921,6 +942,9 @@ def rename_group_for_admin(group_name: str, payload: GroupCreateRequest, token: 
     if new_name == 'General':
         raise HTTPException(status_code=400, detail='Use the existing General group instead of renaming to it.')
 
+    affected_user_ids: list[str] = []
+    moved_calendar_ids: list[str] = []
+
     with DB_LOCK:
         with _db_session() as session:
             group = session.scalar(select(GroupORM).where(GroupORM.name == old_name))
@@ -932,8 +956,11 @@ def rename_group_for_admin(group_name: str, payload: GroupCreateRequest, token: 
             if existing is not None:
                 raise HTTPException(status_code=409, detail='Group already exists.')
 
+            affected_user_ids.extend(_approved_user_ids_for_group(session, old_name))
+
             group.name = new_name
             calendars = session.scalars(select(CalendarORM).where(CalendarORM.group_name == old_name)).all()
+            moved_calendar_ids = [calendar.id for calendar in calendars]
             for calendar in calendars:
                 calendar.group_name = new_name
                 _replace_calendar_group_links(session, calendar.id, [new_name])
@@ -943,6 +970,10 @@ def rename_group_for_admin(group_name: str, payload: GroupCreateRequest, token: 
             for user_id in users_in_group:
                 _replace_user_group_links(session, user_id, [new_name])
             _refresh_user_group_names(session, [str(user_id) for user_id in users_in_group])
+
+    if moved_calendar_ids:
+        _publish_calendar_change('calendar_changed', entity_id=old_name, calendar_ids=moved_calendar_ids)
+    _publish_user_resource_updates(affected_user_ids)
 
     return {'ok': True, 'group': {'name': new_name}}
 
@@ -954,11 +985,17 @@ def delete_group_for_admin(group_name: str, token: str | None = None) -> dict[st
     if group_name == 'General':
         raise HTTPException(status_code=400, detail='The General group cannot be deleted.')
 
+    affected_user_ids: list[str] = []
+    moved_calendar_ids: list[str] = []
+
     with DB_LOCK:
         with _db_session() as session:
             group = session.scalar(select(GroupORM).where(GroupORM.name == group_name))
             if group is None:
                 raise HTTPException(status_code=404, detail='Group not found.')
+
+            affected_user_ids.extend(_approved_user_ids_for_group(session, group_name))
+            affected_user_ids.extend(_approved_user_ids_for_group(session, 'General'))
 
             _ensure_group_names(session, ['General'])
             calendars = session.scalars(select(CalendarORM).where(CalendarORM.group_name == group_name)).all()
@@ -974,6 +1011,10 @@ def delete_group_for_admin(group_name: str, token: str | None = None) -> dict[st
                 _replace_user_group_links(session, user_id, [])
             _refresh_user_group_names(session, [str(user_id) for user_id in users_in_group])
 
+    if moved_calendar_ids:
+        _publish_calendar_change('calendar_changed', entity_id=group_name, calendar_ids=moved_calendar_ids)
+    _publish_user_resource_updates(affected_user_ids)
+
     return {'ok': True, 'groupName': group_name, 'movedTo': 'General', 'calendarIds': moved_calendar_ids}
 
 
@@ -988,6 +1029,7 @@ def update_calendar_group_for_admin(
     _require_admin_user(token)
     calendar_id = _sanitize_id_input(calendar_id, 'calendar_id')
     group_name = _sanitize_text_input(payload.groupName, 'groupName', min_length=1, max_length=120)
+    affected_user_ids: list[str] = []
     with DB_LOCK:
         with _db_session() as session:
             calendar = session.get(CalendarORM, calendar_id)
@@ -996,9 +1038,15 @@ def update_calendar_group_for_admin(
             group_exists = session.scalar(select(GroupORM.name).where(GroupORM.name == group_name))
             if group_exists is None:
                 raise HTTPException(status_code=404, detail='Group not found.')
+            prior_group_name = str(calendar.group_name or 'General')
             calendar.group_name = group_name
             _replace_calendar_group_links(session, calendar.id, [group_name])
+            affected_groups = {prior_group_name, group_name}
+            for affected_group in affected_groups:
+                affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
 
+    _publish_calendar_change('calendar_changed', entity_id=calendar_id, calendar_ids=[calendar_id])
+    _publish_user_resource_updates(affected_user_ids)
     return {'ok': True, 'calendarId': calendar_id, 'groupName': group_name}
 
 
@@ -1017,6 +1065,7 @@ def update_calendar_for_admin(
     color = _sanitize_text_input(payload.color, 'color', min_length=4, max_length=40)
     blurb = _sanitize_text_input(payload.blurb, 'blurb', min_length=0, max_length=500)
     image_url = _sanitize_text_input(payload.imageUrl, 'imageUrl', min_length=0, max_length=5_000_000)
+    affected_user_ids: list[str] = []
 
     with DB_LOCK:
         with _db_session() as session:
@@ -1033,14 +1082,19 @@ def update_calendar_for_admin(
                 raise HTTPException(status_code=409, detail='Another calendar already uses that name.')
 
             _ensure_group_names(session, [group_name])
+            prior_group_name = str(calendar.group_name or 'General')
             calendar.name = name
             calendar.group_name = group_name
             _replace_calendar_group_links(session, calendar.id, [group_name])
             calendar.color = color
             calendar.blurb = blurb
             calendar.image_url = image_url
+            affected_groups = {prior_group_name, group_name}
+            for affected_group in affected_groups:
+                affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
 
     _publish_calendar_change('calendar_changed', entity_id=calendar_id, calendar_ids=[calendar_id])
+    _publish_user_resource_updates(affected_user_ids)
     return {
         'ok': True,
         'calendar': {
@@ -1102,6 +1156,7 @@ def create_group_resource_for_admin(
     _require_admin_user(token)
     group_name = _sanitize_text_input(group_name, 'group_name', min_length=1, max_length=120)
     resource_name = _sanitize_text_input(payload.name, 'name', min_length=1, max_length=120)
+    affected_user_ids: list[str] = []
 
     with DB_LOCK:
         with _db_session() as session:
@@ -1113,15 +1168,23 @@ def create_group_resource_for_admin(
                 select(CalendarORM).where(func.lower(CalendarORM.name) == resource_name.lower())
             )
             if existing_resource is not None:
+                prior_group_name = str(existing_resource.group_name or 'General')
                 existing_resource.group_name = group_name
                 _replace_calendar_group_links(session, existing_resource.id, [group_name])
                 created = False
                 calendar_id = existing_resource.id
+                affected_groups = {prior_group_name, group_name}
             else:
                 calendar_id = str(uuid4())
                 session.add(CalendarORM(id=calendar_id, name=resource_name, group_name=group_name))
                 _replace_calendar_group_links(session, calendar_id, [group_name])
                 created = True
+                affected_groups = {group_name}
+            for affected_group in affected_groups:
+                affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
+
+    _publish_calendar_change('calendar_changed', entity_id=calendar_id, calendar_ids=[calendar_id])
+    _publish_user_resource_updates(affected_user_ids)
 
     return {
         'ok': True,

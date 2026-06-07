@@ -254,6 +254,17 @@ def _upsert_user_group_link(
 
 
 def _replace_calendar_group_links(session: Session, calendar_id: str, group_names: list[str]) -> None:
+    # Flush pending ORM inserts first so newly created calendars are visible
+    # before we write dependent link rows.
+    session.flush()
+    calendar_exists = session.scalar(
+        select(CalendarORM.id)
+        .where(CalendarORM.id == calendar_id)
+        .limit(1)
+    )
+    if calendar_exists is None:
+        raise HTTPException(status_code=404, detail='Calendar not found.')
+
     deduped: list[str] = []
     seen: set[str] = set()
     for group_name in group_names:

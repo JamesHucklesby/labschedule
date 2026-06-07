@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
 from fastapi import HTTPException
@@ -14,7 +14,7 @@ from auth import (
     _require_valid_token,
     _session_user_for_login_or_api_token,
 )
-from config import DEFAULT_USER_ROLE
+from config import DEFAULT_USER_ROLE, SESSION_COOKIE_SECURE
 from database import _db_session, _get_user_calendar_ids
 from models import CalendarORM, UserORM
 from schemas import TokenValidationResult
@@ -22,6 +22,17 @@ from utils import _sanitize_token_input
 from media_assets import calendar_placeholder_data_url
 
 router = APIRouter()
+
+
+def _cookie_secure_flag(request: Request) -> bool:
+    if SESSION_COOKIE_SECURE == 'true':
+        return True
+    if SESSION_COOKIE_SECURE == 'false':
+        return False
+    forwarded_proto = (request.headers.get('x-forwarded-proto') or '').split(',')[0].strip().lower()
+    if forwarded_proto in {'http', 'https'}:
+        return forwarded_proto == 'https'
+    return request.url.scheme == 'https'
 
 
 @router.get('/api/calendars')
@@ -93,24 +104,44 @@ def check_session(request: Request) -> dict[str, Any]:
     return {
         'authenticated': True,
         'user': user,
-        'token': session_token,
         'apiToken': _issue_api_jwt(user['id'], user.get('role', DEFAULT_USER_ROLE)),
     }
 
 
 @router.get('/api/token/validate/{token}', response_model=TokenValidationResult)
-def validate_token_for_landing(token: str, request: Request) -> dict[str, Any]:
+def validate_token_for_landing(token: str, request: Request, response: Response) -> dict[str, Any]:
     _enforce_token_validation_rate_limit(_client_ip_address(request))
     try:
         token = _sanitize_token_input(token)
     except HTTPException:
+        response.delete_cookie(key='session_token', path='/')
+        response.delete_cookie(key='user_id', path='/')
         return {'valid': False, 'token': token, 'apiToken': None, 'name': None, 'calendarIds': []}
     user = _session_user_for_login_or_api_token(token)
     if user is None:
+        response.delete_cookie(key='session_token', path='/')
+        response.delete_cookie(key='user_id', path='/')
         return {'valid': False, 'token': token, 'apiToken': None, 'name': None, 'calendarIds': []}
 
     with _db_session() as session:
         allowed_calendars = _get_user_allowed_calendars(session, user['id']) or set()
+    secure_cookie = _cookie_secure_flag(request)
+    response.set_cookie(
+        key='session_token',
+        value=token,
+        httponly=True,
+        samesite='lax',
+        secure=secure_cookie,
+        path='/',
+    )
+    response.set_cookie(
+        key='user_id',
+        value=user['id'],
+        httponly=True,
+        samesite='lax',
+        secure=secure_cookie,
+        path='/',
+    )
     api_token = (
         token
         if _decode_api_jwt(token) is not None
