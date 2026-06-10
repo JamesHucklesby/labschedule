@@ -12,6 +12,26 @@ from models import CalendarORM
 from utils import _sanitize_id_input
 
 
+_APP_PAGE_TITLE = 'LabSchedule'
+_FAVICON_SVG = (
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+  '<path d="M24 6h16v6h-2v13l13 21a8 8 0 0 1-7 12H20a8 8 0 0 1-7-12l13-21V12h-2z" '
+  'fill="#16a34a" stroke="#14532d" stroke-width="2"/>'
+  '<path d="M21 46h22" stroke="#bbf7d0" stroke-width="4" stroke-linecap="round"/>'
+  '<circle cx="28" cy="39" r="2" fill="#dcfce7"/>'
+  '<circle cx="36" cy="43" r="2" fill="#dcfce7"/>'
+  '</svg>'
+)
+_FAVICON_DATA_URI = 'data:image/svg+xml;utf8,' + url_quote(_FAVICON_SVG)
+
+
+def _apply_page_branding() -> None:
+  ui.add_head_html(f'<title>{html_escape(_APP_PAGE_TITLE)}</title>')
+  ui.add_head_html(
+    f'<link rel="icon" type="image/svg+xml" href="{html_escape(_FAVICON_DATA_URI)}">'
+  )
+
+
 def _calendar_info_blurb(calendar: CalendarORM) -> str:
     blurb = str(getattr(calendar, 'blurb', '') or '').strip()
     if blurb:
@@ -64,16 +84,12 @@ def calendar_info_page(calendar_id: str) -> None:
     with _db_session() as session:
         calendar = session.get(CalendarORM, calendar_id)
 
-    page_title = 'Calendar information'
-    if calendar is not None:
-      page_title = f'{calendar.name} - Calendar information'
-
     ui.add_head_html(
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
     )
-    ui.add_head_html(f'<title>{html_escape(page_title)}</title>')
+    _apply_page_branding()
     ui.add_head_html('''
         <style>
           html, body {
@@ -230,6 +246,7 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
     )
+    _apply_page_branding()
     ui.add_head_html('''
         <style>
           html, body {
@@ -368,6 +385,22 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
             flex-wrap: wrap;
             margin-top: 8px;
           }
+          .calendar-edit-color-preview {
+            margin-top: 8px;
+            width: 100%;
+            min-height: 36px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #0f172a;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+          }
           .calendar-edit-button {
             border: none;
             border-radius: 12px;
@@ -468,6 +501,10 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
                   <div class="calendar-edit-field">
                     <label for="calendar-edit-color">Color</label>
                     <input id="calendar-edit-color" type="color" value="{calendar_color}" />
+                    <div class="calendar-edit-actions" style="margin-top: 6px;">
+                      <button id="calendar-edit-suggest-color" type="button" class="calendar-edit-button secondary">Suggest Distinct Color</button>
+                    </div>
+                    <div id="calendar-edit-color-preview" class="calendar-edit-color-preview">{calendar_color.upper()}</div>
                   </div>
                 </div>
                 <div class="calendar-edit-field">
@@ -515,6 +552,8 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
           const imageNote = document.getElementById('calendar-edit-image-note');
           const saveButton = document.getElementById('calendar-edit-save');
           const resetButton = document.getElementById('calendar-edit-reset');
+          const suggestColorButton = document.getElementById('calendar-edit-suggest-color');
+          const colorPreviewBox = document.getElementById('calendar-edit-color-preview');
           const status = document.getElementById('calendar-edit-status');
           const preview = document.getElementById('calendar-edit-image');
           let storedImageUrl = initial.imageUrl;
@@ -557,10 +596,19 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
             preview.src = {json.dumps(_calendar_info_image_src(calendar))};
           }};
 
+          const syncColorPreview = (value) => {{
+            if (!colorPreviewBox) return;
+            const next = String(value || '').trim() || '#2563eb';
+            colorPreviewBox.style.background = next;
+            colorPreviewBox.textContent = next.toUpperCase();
+          }};
+
           updateImageNote();
           imageInput.value = storedImageUrl;
+          syncColorPreview(colorInput.value || initial.color);
 
           imageInput.addEventListener('input', updatePreview);
+          colorInput.addEventListener('input', () => syncColorPreview(colorInput.value));
           imageFileInput.addEventListener('change', () => {{
             const selectedFile = imageFileInput.files && imageFileInput.files[0];
             imageNote.textContent = selectedFile
@@ -614,7 +662,43 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
             status.textContent = 'Changes reset.';
             updateImageNote();
             updatePreview();
+            syncColorPreview(colorInput.value || initial.color);
           }});
+
+          if (suggestColorButton) {{
+            suggestColorButton.addEventListener('click', async () => {{
+              const groupName = groupInput.value.trim();
+              if (!groupName) {{
+                status.textContent = 'Enter a group name first.';
+                return;
+              }}
+              suggestColorButton.disabled = true;
+              status.textContent = 'Suggesting color...';
+              try {{
+                const response = await fetch('/api/admin/calendars/suggest-color', {{
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: {{ 'Content-Type': 'application/json' }},
+                  body: JSON.stringify({{ groupName, excludeCalendarId: calendarId, avoidColor: colorInput.value }}),
+                }});
+                const data = await response.json().catch(() => ({{ detail: 'Suggestion failed' }}));
+                if (!response.ok) {{
+                  throw new Error(data.detail || 'Suggestion failed');
+                }}
+                const nextColor = String(data.color || '').trim();
+                if (!nextColor) {{
+                  throw new Error('Suggestion failed');
+                }}
+                colorInput.value = nextColor;
+                syncColorPreview(nextColor);
+                status.textContent = `Suggested color: ${{nextColor}}`;
+              }} catch (error) {{
+                status.textContent = error instanceof Error ? error.message : String(error);
+              }} finally {{
+                suggestColorButton.disabled = false;
+              }}
+            }});
+          }}
 
           saveButton.addEventListener('click', async () => {{
             const payload = {{
@@ -660,6 +744,320 @@ def calendar_editor_page(calendar_id: str, request: Request) -> None:
       </script>
     ''')
 
+@ui.page('/signup')
+def signup_page() -> None:
+    ui.add_head_html(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
+    )
+    _apply_page_branding()
+    ui.add_body_html('''
+      <style>
+        html, body {
+          margin: 0;
+          min-height: 100%;
+          background:
+            radial-gradient(circle at top left, rgba(16, 185, 129, 0.2), transparent 40%),
+            radial-gradient(circle at top right, rgba(14, 116, 144, 0.18), transparent 34%),
+            linear-gradient(145deg, #042f2e 0%, #082f2b 48%, #062f2d 100%);
+          color: #e2e8f0;
+          font-family: 'IBM Plex Sans', sans-serif;
+        }
+        .signup-page {
+          min-height: 100vh;
+          display: grid;
+          place-items: center;
+          padding: 24px;
+        }
+        .signup-card {
+          width: min(820px, 100%);
+          border-radius: 24px;
+          border: 1px solid rgba(167, 243, 208, 0.22);
+          background: rgba(5, 23, 29, 0.86);
+          box-shadow: 0 30px 70px rgba(2, 8, 16, 0.42);
+          padding: 24px;
+          display: grid;
+          gap: 18px;
+          backdrop-filter: blur(14px);
+        }
+        .signup-title {
+          margin: 0;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: clamp(1.8rem, 4vw, 2.6rem);
+          color: #f8fafc;
+        }
+        .signup-sub {
+          margin: 0;
+          color: #cbd5e1;
+        }
+        .signup-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 14px;
+        }
+        .signup-box {
+          border: 1px solid rgba(148, 163, 184, 0.32);
+          border-radius: 16px;
+          padding: 16px;
+          display: grid;
+          gap: 12px;
+          background: rgba(15, 23, 42, 0.4);
+        }
+        .signup-box h2 {
+          margin: 0;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-size: 1.12rem;
+          color: #f8fafc;
+        }
+        .signup-box p {
+          margin: 0;
+          color: #cbd5e1;
+          font-size: 0.94rem;
+          line-height: 1.45;
+        }
+        .signup-input {
+          width: 100%;
+          border: 1px solid #334155;
+          border-radius: 10px;
+          background: rgba(15, 23, 42, 0.72);
+          color: #f8fafc;
+          padding: 11px 12px;
+          font-size: 0.95rem;
+          box-sizing: border-box;
+        }
+        .signup-btn {
+          border: none;
+          border-radius: 10px;
+          padding: 10px 14px;
+          font-size: 0.95rem;
+          font-weight: 700;
+          cursor: pointer;
+          color: #fff;
+        }
+        .signup-btn.oauth { background: #4285F4; }
+        .signup-btn.local { background: #0e7490; }
+        .signup-btn.passkey { background: #16a34a; }
+        .signup-note {
+          color: #a7f3d0;
+          font-size: 0.92rem;
+          min-height: 1.2rem;
+        }
+        .signup-result {
+          border: 1px solid rgba(16, 185, 129, 0.32);
+          border-radius: 14px;
+          padding: 12px;
+          background: rgba(16, 185, 129, 0.08);
+          display: none;
+          gap: 8px;
+        }
+        .signup-result a {
+          color: #bbf7d0;
+          word-break: break-all;
+        }
+        .signup-skip-link {
+          color: #93c5fd;
+          font-weight: 600;
+          text-decoration: none;
+          white-space: nowrap;
+        }
+        .signup-skip-link:hover {
+          text-decoration: underline;
+        }
+        .signup-links {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .signup-links a {
+          color: #93c5fd;
+        }
+        @media (max-width: 760px) {
+          .signup-row { grid-template-columns: 1fr; }
+        }
+      </style>
+      <main class="signup-page">
+        <section class="signup-card">
+          <h1 class="signup-title">Create your Lab Scheduler account</h1>
+          <p class="signup-sub">Choose OAuth signup or create a local account with a login link and passkey setup.</p>
+
+          <div class="signup-row">
+            <section class="signup-box">
+              <h2>OAuth Signup</h2>
+              <p>Use your university Google account. This matches the main login flow.</p>
+              <button id="signup-oauth-btn" type="button" class="signup-btn oauth">Sign up with Google</button>
+            </section>
+
+            <section class="signup-box">
+              <h2>Local Signup</h2>
+              <p>Enter your name and email to get a login link. Then optionally create a passkey immediately.</p>
+              <input id="signup-name" class="signup-input" type="text" maxlength="120" placeholder="Full name" />
+              <input id="signup-email" class="signup-input" type="email" maxlength="254" placeholder="Email" />
+              <input id="signup-passkey-name" class="signup-input" type="text" maxlength="80" placeholder="Passkey name (optional)" />
+              <button id="signup-local-btn" type="button" class="signup-btn local">Create Account</button>
+            </section>
+          </div>
+
+          <div id="signup-note" class="signup-note"></div>
+
+          <section id="signup-result" class="signup-result">
+            <div><strong>Login link issued:</strong></div>
+            <a id="signup-login-link" href="#"></a>
+            <div style="display:flex; gap:10px; flex-wrap: wrap;">
+              <button id="signup-passkey-btn" type="button" class="signup-btn passkey">Create Passkey Now</button>
+              <a id="signup-continue-link" class="signup-skip-link" href="/">Skip passkey and go to schedule</a>
+            </div>
+          </section>
+
+          <div class="signup-links">
+            <a href="/">Back to homepage</a>
+          </div>
+        </section>
+      </main>
+      <script>
+        (() => {
+          const oauthBtn = document.getElementById('signup-oauth-btn');
+          const localBtn = document.getElementById('signup-local-btn');
+          const passkeyBtn = document.getElementById('signup-passkey-btn');
+          const note = document.getElementById('signup-note');
+          const resultBox = document.getElementById('signup-result');
+          const loginLink = document.getElementById('signup-login-link');
+          const continueLink = document.getElementById('signup-continue-link');
+          const nameInput = document.getElementById('signup-name');
+          const emailInput = document.getElementById('signup-email');
+          const passkeyNameInput = document.getElementById('signup-passkey-name');
+
+          let apiToken = '';
+          let loginToken = '';
+
+          const toBuffer = (value) => {
+            const input = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+            const padLen = (4 - (input.length % 4)) % 4;
+            const padded = input + '='.repeat(padLen);
+            const binary = atob(padded);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+          };
+
+          const toBase64Url = (buffer) => {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+            return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+          };
+
+          const fetchJson = async (path, method = 'GET', body = null) => {
+            const opts = {
+              method,
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+            };
+            if (body !== null) opts.body = JSON.stringify(body);
+            const response = await fetch(path, opts);
+            const data = await response.json().catch(() => ({ detail: 'Request failed' }));
+            if (!response.ok) {
+              throw new Error(String(data.detail || 'Request failed'));
+            }
+            return data;
+          };
+
+          oauthBtn?.addEventListener('click', () => {
+            window.location.href = '/auth/google-login';
+          });
+
+          localBtn?.addEventListener('click', async () => {
+            note.textContent = '';
+            localBtn.disabled = true;
+            localBtn.textContent = 'Creating...';
+            try {
+              const name = String(nameInput?.value || '').trim();
+              const email = String(emailInput?.value || '').trim();
+              const result = await fetchJson('/auth/local-signup', 'POST', { name, email });
+              apiToken = String(result.apiToken || '').trim();
+              loginToken = String(result.loginToken || '').trim();
+              const url = String(result.loginUrl || '').trim();
+              loginLink.href = url || '#';
+              loginLink.textContent = url || 'Login link unavailable';
+              continueLink.href = loginToken ? '/?token=' + encodeURIComponent(loginToken) : '/';
+              resultBox.style.display = 'grid';
+              note.textContent = 'Account created. You can now create a passkey.';
+            } catch (error) {
+              note.textContent = error instanceof Error ? error.message : String(error);
+            } finally {
+              localBtn.disabled = false;
+              localBtn.textContent = 'Create Account';
+            }
+          });
+
+          passkeyBtn?.addEventListener('click', async () => {
+            if (!apiToken) {
+              note.textContent = 'Create an account first.';
+              return;
+            }
+            if (!window.PublicKeyCredential || !navigator.credentials || !navigator.credentials.create) {
+              note.textContent = 'This browser does not support passkey creation.';
+              return;
+            }
+
+            passkeyBtn.disabled = true;
+            passkeyBtn.textContent = 'Creating passkey...';
+            try {
+              const optionsResult = await fetchJson('/api/passkeys/register/options?token=' + encodeURIComponent(apiToken), 'POST', {});
+              const publicKey = optionsResult?.publicKey;
+              if (!publicKey || !publicKey.challenge || !publicKey.user || !publicKey.user.id) {
+                throw new Error('Invalid passkey options returned.');
+              }
+
+              const creationOptions = {
+                ...publicKey,
+                challenge: toBuffer(publicKey.challenge),
+                user: {
+                  ...publicKey.user,
+                  id: toBuffer(publicKey.user.id),
+                },
+                excludeCredentials: Array.isArray(publicKey.excludeCredentials)
+                  ? publicKey.excludeCredentials.map(descriptor => ({ ...descriptor, id: toBuffer(descriptor.id) }))
+                  : [],
+              };
+
+              const credential = await navigator.credentials.create({ publicKey: creationOptions });
+              if (!credential) {
+                throw new Error('Passkey creation cancelled.');
+              }
+
+              const credentialPayload = {
+                id: credential.id,
+                type: credential.type,
+                rawId: toBase64Url(credential.rawId),
+                response: {
+                  clientDataJSON: toBase64Url(credential.response.clientDataJSON),
+                  attestationObject: toBase64Url(credential.response.attestationObject),
+                  transports: typeof credential.response.getTransports === 'function' ? credential.response.getTransports() : [],
+                },
+              };
+
+              const passkeyName = String(passkeyNameInput?.value || '').trim();
+              await fetchJson('/api/passkeys/register/verify?token=' + encodeURIComponent(apiToken), 'POST', {
+                credential: credentialPayload,
+                passkeyName: passkeyName,
+              });
+              note.textContent = 'Passkey created successfully. Redirecting to schedule...';
+              window.location.href = continueLink && continueLink.href ? continueLink.href : '/';
+            } catch (error) {
+              note.textContent = error instanceof Error ? error.message : String(error);
+            } finally {
+              passkeyBtn.disabled = false;
+              passkeyBtn.textContent = 'Create Passkey Now';
+            }
+          });
+        })();
+      </script>
+    ''')
+
+
 @ui.page('/')
 def index() -> None:
     ui.add_head_html(
@@ -667,6 +1065,7 @@ def index() -> None:
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">'
     )
+    _apply_page_branding()
     ui.add_head_html(
         '<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css"'
         ' rel="stylesheet" />'
@@ -779,21 +1178,8 @@ def index() -> None:
             position: relative;
             z-index: 2;
           }
-          .landing-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.76rem;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            padding: 7px 12px;
-            border-radius: 999px;
-            color: #d1fae5;
-            background: rgba(16, 185, 129, 0.2);
-            border: 1px solid rgba(134, 239, 172, 0.35);
-          }
           .landing-title {
-            margin: 14px 0 8px;
+            margin: 4px 0 8px;
             font-size: clamp(1.65rem, 4.8vw, 2.7rem);
             line-height: 1.15;
             color: #f0fdf4;
@@ -802,8 +1188,8 @@ def index() -> None:
             margin: 0;
             color: #c7f9e7;
             font-size: 1rem;
-            line-height: 1.6;
-            max-width: 32ch;
+            line-height: 1.45;
+            max-width: none;
           }
           .landing-form {
             margin-top: 22px;
@@ -845,6 +1231,48 @@ def index() -> None:
             font-size: 0.88rem;
             color: #bbf7d0;
             min-height: 1.25rem;
+          }
+          .landing-auth {
+            margin-top: 20px;
+            padding-top: 18px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: grid;
+            gap: 10px;
+          }
+          .landing-auth-title {
+            margin: 0;
+            color: #cbd5e1;
+            font-size: 0.95rem;
+            font-weight: 700;
+            text-align: center;
+          }
+          .landing-auth-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+          .landing-auth-row-single {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }
+          .landing-submit--auth {
+            width: 100%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+          }
+          .landing-auth .landing-input {
+            max-width: none;
+          }
+          .landing-signup-note {
+            margin-top: 2px;
+            text-align: center;
+          }
+          .landing-signup-note a {
+            color: #93c5fd;
+            font-size: 0.92rem;
           }
           .ws-status {
             margin: 10px 12px 14px;
@@ -1206,6 +1634,25 @@ def index() -> None:
             letter-spacing: 0.09em;
             color: #94a3b8;
           }
+          .sidebar-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding-right: 12px;
+          }
+          .sidebar-section-title--group {
+            padding-right: 0;
+          }
+          .sidebar-group-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.7rem;
+            color: #94a3b8;
+            cursor: pointer;
+            user-select: none;
+          }
           .sidebar-cal-item {
             display: flex;
             align-items: center;
@@ -1348,6 +1795,39 @@ def index() -> None:
           .admin-link-meta {
             font-size: 0.84rem;
             color: #64748b;
+          }
+          .admin-inline-link {
+            font-size: 0.84rem;
+            color: #0e7490;
+            text-decoration: underline;
+            cursor: pointer;
+            width: fit-content;
+          }
+          .admin-inline-link[aria-disabled="true"] {
+            color: #94a3b8;
+            pointer-events: none;
+            text-decoration: none;
+            cursor: default;
+          }
+          .share-link-list {
+            display: grid;
+            gap: 12px;
+          }
+          .share-link-row {
+            border: 1px solid #dbe4f0;
+            border-radius: 12px;
+            padding: 12px;
+            background: #f8fafc;
+            display: grid;
+            gap: 6px;
+          }
+          .share-link-name {
+            font-weight: 700;
+            color: #0f172a;
+          }
+          .share-link-empty {
+            color: #64748b;
+            font-size: 0.95rem;
           }
           .admin-resource-pills {
             display: flex;
@@ -1534,14 +2014,19 @@ def index() -> None:
             color: #1e3a8a;
           }
           .admin-pill-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 16px;
+            height: 16px;
             border: none;
             background: transparent;
             color: #334155;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             font-weight: 700;
             line-height: 1;
             cursor: pointer;
-            padding: 0 2px;
+            padding: 0;
           }
           .admin-pill-remove:hover { color: #991b1b; }
           .admin-editor-row {
@@ -1561,6 +2046,28 @@ def index() -> None:
           .admin-helper {
             color: #64748b;
             font-size: 0.82rem;
+          }
+          .admin-save-button {
+            border: none;
+            border-radius: 10px;
+            padding: 11px 18px;
+            font-size: 0.96rem;
+            font-weight: 700;
+            cursor: pointer;
+            background: #166534;
+            color: #ffffff;
+            transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+          }
+          .admin-save-button:hover:not(:disabled) {
+            background: #14532d;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 16px rgba(22, 101, 52, 0.25);
+          }
+          .admin-save-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
           }
           .admin-resource-catalog {
             display: flex;
@@ -1815,6 +2322,18 @@ def index() -> None:
           .btn-danger  { background:#dc2626; color:#fff; }
           .btn-neutral { background:#e2e8f0; color:#0f172a; }
           .btn-group   { display:flex; gap:8px; }
+          .save-account-auth-message {
+            margin: 0;
+            font-size: 0.94rem;
+            color: #334155;
+            line-height: 1.45;
+          }
+          .save-account-auth-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+          }
           .event-notes-tooltip {
             position: fixed;
             z-index: 2000;
@@ -1836,9 +2355,105 @@ def index() -> None:
             font-size: 0.9em;
             vertical-align: text-bottom;
           }
+          .profile-screen {
+            min-height: 100vh;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background:
+              radial-gradient(circle at 20% 20%, rgba(16, 185, 129, 0.18), transparent 48%),
+              radial-gradient(circle at 80% 10%, rgba(14, 116, 144, 0.18), transparent 42%),
+              linear-gradient(160deg, #022c22 0%, #052e2b 56%, #082f2f 100%);
+          }
+          .profile-card {
+            width: min(640px, 100%);
+            background: rgba(4, 15, 22, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            box-shadow: 0 20px 48px rgba(2, 8, 23, 0.34);
+            border-radius: 18px;
+            padding: 20px;
+            display: grid;
+            gap: 12px;
+            color: #e2e8f0;
+          }
+          .profile-card h2 {
+            margin: 0;
+            color: #f8fafc;
+            font-size: 1.35rem;
+          }
+          .profile-card p {
+            margin: 0;
+            color: #cbd5e1;
+            font-size: 0.95rem;
+          }
+          .profile-form {
+            display: grid;
+            gap: 10px;
+            margin-top: 6px;
+          }
+          .profile-field {
+            display: grid;
+            gap: 6px;
+          }
+          .profile-field label {
+            font-size: 0.9rem;
+            color: #bae6fd;
+            font-weight: 600;
+          }
+          .profile-field input {
+            width: 100%;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.65);
+            color: #f8fafc;
+            padding: 10px 12px;
+            box-sizing: border-box;
+          }
+          .profile-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 8px;
+          }
+          .profile-submit {
+            border: none;
+            border-radius: 10px;
+            padding: 10px 14px;
+            background: #0f766e;
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+          }
+          .profile-error {
+            min-height: 1.2rem;
+            color: #fecaca;
+            font-size: 0.9rem;
+          }
+          .lab-group-modal-copy {
+            display: grid;
+            gap: 10px;
+            color: #334155;
+          }
+          .lab-group-modal-copy label {
+            display: grid;
+            gap: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #0f172a;
+          }
+          .lab-group-modal-copy input,
+          .lab-group-modal-copy select {
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 9px 10px;
+            font-size: 0.94rem;
+          }
           @media (max-width:640px) {
             .landing-form { grid-template-columns: 1fr; }
+            .landing-auth-row { grid-template-columns: 1fr; }
             .event-dialog-row { grid-template-columns:1fr; }
+            .profile-card { padding: 16px; }
           }
         </style>
     ''')
@@ -1853,11 +2468,8 @@ def index() -> None:
           <section class="landing-card">
             <div class="card-sheen"></div>
             <div class="landing-content">
-              <div class="landing-badge">&#129516; Bioinformatics Access Portal</div>
-              <h1 class="landing-title">Cell-Cycle Scheduling Dashboard</h1>
-              <p class="landing-subtitle">
-                Enter your access token to open the shared lab scheduling view.
-              </p>
+              <h1 class="landing-title">LabScheduling Dashboard</h1>
+              <p class="landing-subtitle">Enter your access token to open the shared lab scheduling view.</p>
 
             <div class="landing-form">
                 <input id="token-input" class="landing-input" type="text" placeholder="Enter access token (for example: science)" />
@@ -1865,16 +2477,55 @@ def index() -> None:
               </div>
               <p id="token-help" class="landing-help"></p>
 
-              <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); text-align: center;">
-                <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 12px;">Or sign in with your university account:</p>
-                <button id="google-login-btn" class="landing-submit" type="button" style="background: #4285F4; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                  </svg>
-                  Sign in with Google
-                </button>
+              <div class="landing-auth">
+                <p class="landing-auth-title">Or Sign In:</p>
+                <div class="landing-auth-row">
+                  <button id="google-login-btn" class="landing-submit landing-submit--auth" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                    </svg>
+                    Sign in with Google
+                  </button>
+                  <button id="passkey-login-btn" class="landing-submit landing-submit--auth" type="button">
+                    <span aria-hidden="true">&#128273;</span>
+                    Login with Passkey
+                  </button>
+                </div>
+                <div class="landing-auth-row-single">
+                  <input id="email-login-input" class="landing-input" type="email" maxlength="254" placeholder="Email login link" />
+                  <button id="email-login-btn" class="landing-submit landing-submit--auth" type="button">Send Email Login Link</button>
+                </div>
+                <div class="landing-signup-note">
+                  <a href="/signup">Need an account? Sign up</a>
+                </div>
               </div>
             </div>
+          </section>
+        </div>
+
+        <div id="profile-onboarding-screen" class="profile-screen" aria-live="polite">
+          <section class="profile-card">
+            <h2>Complete your profile</h2>
+            <p>Before continuing, please confirm your name, contact details, and lab group.</p>
+            <form id="profile-onboarding-form" class="profile-form">
+              <div class="profile-field">
+                <label for="profile-onboarding-name">Name</label>
+                <input id="profile-onboarding-name" type="text" maxlength="120" required />
+              </div>
+              <div class="profile-field">
+                <label for="profile-onboarding-contact">Contact</label>
+                <input id="profile-onboarding-contact" type="text" maxlength="254" placeholder="Email, phone, or extension" required />
+              </div>
+              <div class="profile-field">
+                <label for="profile-onboarding-lab-group">Lab group</label>
+                <input id="profile-onboarding-lab-group" list="profile-onboarding-lab-group-options" type="text" maxlength="120" placeholder="Choose or type your lab group" required />
+                <datalist id="profile-onboarding-lab-group-options"></datalist>
+              </div>
+              <div id="profile-onboarding-error" class="profile-error"></div>
+              <div class="profile-actions">
+                <button id="profile-onboarding-submit" class="profile-submit" type="submit">Continue</button>
+              </div>
+            </form>
           </section>
         </div>
 
@@ -1883,12 +2534,15 @@ def index() -> None:
           <!-- Left sidebar -->
           <nav class="sidebar">
             <div id="sidebar-logo" class="sidebar-logo">&#128300; Lab Scheduler</div>
-            <div class="sidebar-section-title">Calendars</div>
+            <div id="calendar-nav-item" class="sidebar-nav-item active">
+              <span class="sidebar-nav-icon">&#128197;</span>
+              <span>Calendars</span>
+            </div>
             <div id="calendar-list"></div>
             <div class="sidebar-nav-spacer"></div>
             <div id="access-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#128272;</span>
-              <span>Request Access</span>
+              <span>User Settings</span>
             </div>
             <div id="admin-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#9881;</span>
@@ -1897,6 +2551,14 @@ def index() -> None:
             <div id="logout-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#128682;</span>
               <span id="logout-nav-label">Logout</span>
+            </div>
+            <div id="signup-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#10133;</span>
+              <span>Sign up</span>
+            </div>
+            <div id="share-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#128257;</span>
+              <span>Share</span>
             </div>
             <div id="token-action-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#128179;</span>
@@ -1919,9 +2581,47 @@ def index() -> None:
             </div>
             <div id="access-panel" class="access-panel" hidden>
               <section class="admin-card">
-                <h2>Request Access</h2>
-                <p>Request access to a whole group or an individual calendar.</p>
+                <h2>Profile</h2>
+                <p>Update your name, contact details, and lab group.</p>
+                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                  <input id="settings-profile-name-input" class="admin-datalist-input" type="text" maxlength="120" placeholder="Name" />
+                </div>
+                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                  <input id="settings-profile-contact-input" class="admin-datalist-input" type="text" maxlength="254" placeholder="Contact" />
+                </div>
+                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                  <input id="settings-profile-lab-group-input" class="admin-datalist-input" list="settings-profile-lab-group-options" type="text" maxlength="120" placeholder="Lab group" />
+                  <datalist id="settings-profile-lab-group-options"></datalist>
+                </div>
+                <div id="settings-profile-error" class="admin-helper" style="margin-top: 8px; color: #dc2626;"></div>
+                <div class="admin-editor-row" style="grid-template-columns: 1fr auto; margin-top: 10px;">
+                  <button id="settings-profile-save-button" type="button" class="admin-save-button">Save profile</button>
+                </div>
+              </section>
+              <section class="admin-card">
+                <h2>User Settings</h2>
+                <p>Manage your access preferences for groups and calendars.</p>
                 <div id="access-catalog-grid" class="access-catalog-grid"></div>
+              </section>
+              <section class="admin-card">
+                <h2>Login Link</h2>
+                <p>Regenerate your Diceware login string for link-based sign-in.</p>
+                <div class="admin-link-meta" style="display: grid; gap: 6px; margin-top: 4px;">
+                  <a id="own-login-link-anchor" href="#" target="_blank" rel="noreferrer noopener">No login URL</a>
+                  <a id="own-login-link-copy" class="admin-inline-link" href="#" aria-disabled="true">Copy to clipboard</a>
+                </div>
+                <div class="admin-editor-row" style="grid-template-columns: 1fr auto; margin-top: 10px;">
+                  <button id="regenerate-own-login-link-button" type="button" class="admin-save-button">Regenerate</button>
+                </div>
+              </section>
+              <section class="admin-card">
+                <h2>Passkeys</h2>
+                <p>Create a passkey for faster and more secure sign-in on this device.</p>
+                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr) auto;">
+                  <input id="passkey-name-input" class="admin-datalist-input" type="text" maxlength="80" placeholder="Passkey name (e.g. Work MacBook)" />
+                  <button id="create-passkey-button" type="button" class="admin-save-button">Create Passkey</button>
+                </div>
+                <div id="passkey-list" class="admin-resource-pills" style="margin-top: 8px;"></div>
               </section>
             </div>
             <div id="admin-panel" class="admin-panel" hidden>
@@ -2068,6 +2768,56 @@ def index() -> None:
             <button id="group-create-resource-dialog-confirm" class="btn btn-primary" type="button">Create & Add</button>
           </div>
         </dialog>
+
+        <dialog id="linked-removal-dialog" class="event-dialog">
+          <div id="linked-removal-dialog-title" class="event-dialog-header overlap-dialog-header">Confirm Related Removal</div>
+          <div class="event-dialog-body">
+            <p id="linked-removal-dialog-message" class="overlap-dialog-message"></p>
+          </div>
+          <div class="event-dialog-actions" style="justify-content:flex-end; gap: 10px;">
+            <button id="linked-removal-dialog-keep" class="btn btn-neutral" type="button">Keep</button>
+            <button id="linked-removal-dialog-remove" class="btn btn-danger" type="button">Remove</button>
+          </div>
+        </dialog>
+
+        <dialog id="save-account-auth-dialog" class="event-dialog">
+          <div class="event-dialog-header">Save To Account</div>
+          <div class="event-dialog-body">
+            <p class="save-account-auth-message">Sign in to a user account to save these calendars. Choose Google OAuth or a registered passkey.</p>
+          </div>
+          <div class="event-dialog-actions save-account-auth-actions">
+            <button id="save-account-auth-cancel" class="btn btn-neutral" type="button">Cancel</button>
+            <button id="save-account-auth-passkey" class="btn btn-neutral" type="button">Sign in with Passkey</button>
+            <button id="save-account-auth-google" class="btn btn-primary" type="button">Sign in with Google</button>
+          </div>
+        </dialog>
+
+        <dialog id="share-links-dialog" class="event-dialog">
+          <div class="event-dialog-header">Share Links</div>
+          <div class="event-dialog-body">
+            <div id="share-links-list" class="share-link-list"></div>
+          </div>
+          <div class="event-dialog-actions" style="justify-content:flex-end;">
+            <button id="share-links-close" class="btn btn-neutral" type="button">Close</button>
+          </div>
+        </dialog>
+
+        <dialog id="lab-group-confirm-dialog" class="event-dialog">
+          <div class="event-dialog-header">Confirm Lab Group</div>
+          <div class="event-dialog-body lab-group-modal-copy">
+            <p id="lab-group-confirm-message">Lab group not found, please confirm spelling.</p>
+            <label for="lab-group-confirm-input">Edit lab group
+              <input id="lab-group-confirm-input" type="text" maxlength="120" />
+            </label>
+            <label for="lab-group-confirm-select">Or choose existing
+              <select id="lab-group-confirm-select"></select>
+            </label>
+          </div>
+          <div class="event-dialog-actions" style="justify-content:flex-end; gap: 10px;">
+            <button id="lab-group-confirm-cancel" class="btn btn-neutral" type="button">Go back</button>
+            <button id="lab-group-confirm-apply" class="btn btn-primary" type="button">Join group</button>
+          </div>
+        </dialog>
     ''')
 
     # Standalone offline guard — injected as initial page HTML, runs immediately
@@ -2173,9 +2923,12 @@ def index() -> None:
   const deleteButton    = document.getElementById('event-delete');
   const calendarList    = document.getElementById('calendar-list');
   const sidebarLogo     = document.getElementById('sidebar-logo');
+  const calendarNavItem = document.getElementById('calendar-nav-item');
   const accessNavItem   = document.getElementById('access-nav-item');
   const adminNavItem    = document.getElementById('admin-nav-item');
   const logoutNavItem   = document.getElementById('logout-nav-item');
+  const signupNavItem   = document.getElementById('signup-nav-item');
+  const shareNavItem    = document.getElementById('share-nav-item');
   const tokenActionNavItem = document.getElementById('token-action-nav-item');
   const calendarView    = document.getElementById('calendar-view');
   const accessPanel     = document.getElementById('access-panel');
@@ -2184,9 +2937,29 @@ def index() -> None:
   const adminUserGrid   = document.getElementById('admin-user-grid');
   const adminAccessRequestsGrid = document.getElementById('admin-access-requests-grid');
   const accessCatalogGrid = document.getElementById('access-catalog-grid');
+  const settingsProfileNameInput = document.getElementById('settings-profile-name-input');
+  const settingsProfileContactInput = document.getElementById('settings-profile-contact-input');
+  const settingsProfileLabGroupInput = document.getElementById('settings-profile-lab-group-input');
+  const settingsProfileLabGroupOptions = document.getElementById('settings-profile-lab-group-options');
+  const settingsProfileError = document.getElementById('settings-profile-error');
+  const settingsProfileSaveButton = document.getElementById('settings-profile-save-button');
+  const ownLoginLinkAnchor = document.getElementById('own-login-link-anchor');
+  const ownLoginLinkCopy = document.getElementById('own-login-link-copy');
+  const regenerateOwnLoginLinkButton = document.getElementById('regenerate-own-login-link-button');
+  const passkeyNameInput = document.getElementById('passkey-name-input');
+  const createPasskeyButton = document.getElementById('create-passkey-button');
+  const passkeyList = document.getElementById('passkey-list');
   const eventCalendars  = document.getElementById('event-calendars');
   const appShell        = document.getElementById('app-shell');
   const landingScreen   = document.getElementById('landing-screen');
+  const profileOnboardingScreen = document.getElementById('profile-onboarding-screen');
+  const profileOnboardingForm = document.getElementById('profile-onboarding-form');
+  const profileOnboardingName = document.getElementById('profile-onboarding-name');
+  const profileOnboardingContact = document.getElementById('profile-onboarding-contact');
+  const profileOnboardingLabGroup = document.getElementById('profile-onboarding-lab-group');
+  const profileOnboardingLabGroupOptions = document.getElementById('profile-onboarding-lab-group-options');
+  const profileOnboardingError = document.getElementById('profile-onboarding-error');
+  const profileOnboardingSubmit = document.getElementById('profile-onboarding-submit');
   const tokenInput      = document.getElementById('token-input');
   const tokenSubmit     = document.getElementById('token-submit');
   const tokenHelp       = document.getElementById('token-help');
@@ -2215,6 +2988,24 @@ def index() -> None:
   const groupCreateResourceMessage = document.getElementById('group-create-resource-dialog-message');
   const groupCreateResourceCancel = document.getElementById('group-create-resource-dialog-cancel');
   const groupCreateResourceConfirm = document.getElementById('group-create-resource-dialog-confirm');
+  const linkedRemovalDialog = document.getElementById('linked-removal-dialog');
+  const linkedRemovalTitle = document.getElementById('linked-removal-dialog-title');
+  const linkedRemovalMessage = document.getElementById('linked-removal-dialog-message');
+  const linkedRemovalKeep = document.getElementById('linked-removal-dialog-keep');
+  const linkedRemovalRemove = document.getElementById('linked-removal-dialog-remove');
+  const saveAccountAuthDialog = document.getElementById('save-account-auth-dialog');
+  const saveAccountAuthCancel = document.getElementById('save-account-auth-cancel');
+  const saveAccountAuthPasskey = document.getElementById('save-account-auth-passkey');
+  const saveAccountAuthGoogle = document.getElementById('save-account-auth-google');
+  const shareLinksDialog = document.getElementById('share-links-dialog');
+  const shareLinksList = document.getElementById('share-links-list');
+  const shareLinksClose = document.getElementById('share-links-close');
+  const labGroupConfirmDialog = document.getElementById('lab-group-confirm-dialog');
+  const labGroupConfirmMessage = document.getElementById('lab-group-confirm-message');
+  const labGroupConfirmInput = document.getElementById('lab-group-confirm-input');
+  const labGroupConfirmSelect = document.getElementById('lab-group-confirm-select');
+  const labGroupConfirmCancel = document.getElementById('lab-group-confirm-cancel');
+  const labGroupConfirmApply = document.getElementById('lab-group-confirm-apply');
   const eventNotesTooltip = document.createElement('div');
   eventNotesTooltip.className = 'event-notes-tooltip';
   document.body.appendChild(eventNotesTooltip);
@@ -2228,13 +3019,19 @@ def index() -> None:
   let   currentUser   = null;
   let   adminUsersData = null;
   let   accessCatalogData = null;
+  let   userPasskeys = [];
+  let   shareLinksData = [];
   let   currentView   = 'calendar';
   let   hiddenCals    = new Set();   // ids of deselected calendars
   let   currentToken  = null;        // token from URL for API requests
+  let   sharedLinkToken = null;      // original non-JWT link token, if any
   let   authenticatedSessionToken = null; // session cookie token for the logged-in user
   let   tokenAllowedCalendars = null; // calendars accessible via token
   let   tokenAccessRequested = false; // true when the current page was opened via a token URL
   let   hasValidToken = false;
+  let   knownLabGroups = [];
+  let   pendingProfileContinue = null;
+  let   pendingLabGroupResolve = null;
   let   dialogLoadedEvents = [];
   let   dialogSuggestionEvents = [];
   let   dialogAvailabilityRequestId = 0;
@@ -2606,6 +3403,9 @@ def index() -> None:
           if (normalized) {
             currentToken = normalized;
             tokenAccessRequested = !isJwtToken(normalized);
+            if (tokenAccessRequested) {
+              sharedLinkToken = normalized;
+            }
             return;
           }
         }
@@ -2869,6 +3669,171 @@ def index() -> None:
     return res.status === 204 ? null : res.json();
   }
 
+  function normalizeGroupName(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function setKnownLabGroups(values) {
+    const nextValues = Array.isArray(values)
+      ? values
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+      : [];
+    knownLabGroups = Array.from(new Set(nextValues)).sort((left, right) => left.localeCompare(right));
+    if (profileOnboardingLabGroupOptions) {
+      profileOnboardingLabGroupOptions.innerHTML = '';
+      for (const groupName of knownLabGroups) {
+        const option = document.createElement('option');
+        option.value = groupName;
+        profileOnboardingLabGroupOptions.appendChild(option);
+      }
+    }
+    if (settingsProfileLabGroupOptions) {
+      settingsProfileLabGroupOptions.innerHTML = '';
+      for (const groupName of knownLabGroups) {
+        const option = document.createElement('option');
+        option.value = groupName;
+        settingsProfileLabGroupOptions.appendChild(option);
+      }
+    }
+  }
+
+  async function promptForNewLabGroup(initialValue) {
+    const normalizedInitial = String(initialValue || '').trim();
+    if (!normalizedInitial) {
+      return '';
+    }
+    if (!labGroupConfirmDialog || !labGroupConfirmInput || !labGroupConfirmSelect || !labGroupConfirmApply) {
+      return normalizedInitial;
+    }
+
+    const updateLabGroupConfirmState = () => {
+      const editedValue = String(labGroupConfirmInput?.value || '').trim();
+      const selectedValue = String(labGroupConfirmSelect?.value || '').trim();
+      const resolvedValue = selectedValue || editedValue;
+      const labelValue = resolvedValue || normalizedInitial;
+      labGroupConfirmApply.textContent = `Join group ${labelValue}`;
+      labGroupConfirmApply.disabled = !resolvedValue;
+      if (labGroupConfirmMessage) {
+        labGroupConfirmMessage.textContent = 'Lab group not found, please confirm spelling.';
+      }
+    };
+
+    labGroupConfirmInput.value = normalizedInitial;
+    labGroupConfirmSelect.innerHTML = '<option value="">Use typed group name</option>';
+    for (const groupName of knownLabGroups) {
+      const option = document.createElement('option');
+      option.value = groupName;
+      option.textContent = groupName;
+      labGroupConfirmSelect.appendChild(option);
+    }
+
+    labGroupConfirmInput.oninput = updateLabGroupConfirmState;
+    labGroupConfirmSelect.onchange = updateLabGroupConfirmState;
+    updateLabGroupConfirmState();
+
+    return new Promise((resolve) => {
+      pendingLabGroupResolve = resolve;
+      labGroupConfirmDialog.showModal();
+    });
+  }
+
+  async function maybeRequireProfileOnboarding(onContinue) {
+    let profile;
+    try {
+      profile = await request('/api/users/me/profile', 'GET', null, true);
+    } catch (error) {
+      console.warn('Failed to fetch user profile status:', error);
+      return false;
+    }
+
+    setKnownLabGroups(profile?.labGroups || []);
+    if (!profile?.needsProfile) {
+      return false;
+    }
+
+    pendingProfileContinue = onContinue;
+    if (profileOnboardingError) {
+      profileOnboardingError.textContent = '';
+    }
+    if (profileOnboardingName) {
+      profileOnboardingName.value = String(profile?.user?.name || currentUser?.name || '').trim();
+    }
+    if (profileOnboardingContact) {
+      profileOnboardingContact.value = String(profile?.user?.contact || currentUser?.contact || '').trim();
+    }
+    if (profileOnboardingLabGroup) {
+      profileOnboardingLabGroup.value = String(profile?.user?.labGroup || currentUser?.labGroup || '').trim();
+    }
+
+    landingScreen.style.display = 'none';
+    appShell.style.display = 'none';
+    if (profileOnboardingScreen) {
+      profileOnboardingScreen.style.display = 'flex';
+    }
+    return true;
+  }
+
+  async function saveProfileWithLabGroupConfirm({ name, contact, labGroup }) {
+    const normalizedName = String(name || '').trim();
+    const normalizedContact = String(contact || '').trim();
+    let normalizedLabGroup = String(labGroup || '').trim();
+    if (!normalizedName || !normalizedContact || !normalizedLabGroup) {
+      throw new Error('Name, contact, and lab group are required.');
+    }
+
+    const knownByNormalized = new Map(knownLabGroups.map(value => [normalizeGroupName(value), value]));
+    const knownGroupValue = knownByNormalized.get(normalizeGroupName(normalizedLabGroup));
+    if (knownGroupValue) {
+      normalizedLabGroup = knownGroupValue;
+    } else {
+      const resolved = await promptForNewLabGroup(normalizedLabGroup);
+      const resolvedValue = String(resolved || '').trim();
+      if (!resolvedValue) {
+        throw new Error('Please choose or enter a lab group.');
+      }
+      const existingResolved = knownByNormalized.get(normalizeGroupName(resolvedValue));
+      normalizedLabGroup = existingResolved || resolvedValue;
+    }
+
+    const result = await request('/api/users/me/profile', 'PUT', {
+      name: normalizedName,
+      contact: normalizedContact,
+      labGroup: normalizedLabGroup,
+    }, true);
+    setKnownLabGroups(result?.labGroups || []);
+
+    const updatedUser = result?.user || {};
+    currentUser = {
+      ...(currentUser || {}),
+      name: String(updatedUser.name || normalizedName),
+      contact: String(updatedUser.contact || normalizedContact),
+      labGroup: String(updatedUser.labGroup || normalizedLabGroup),
+      profileComplete: true,
+    };
+
+    return {
+      result,
+      name: normalizedName,
+      contact: normalizedContact,
+      labGroup: normalizedLabGroup,
+    };
+  }
+
+  async function loadUserProfileSettings() {
+    const profile = await request('/api/users/me/profile', 'GET', null, true);
+    setKnownLabGroups(profile?.labGroups || []);
+    if (settingsProfileNameInput) {
+      settingsProfileNameInput.value = String(profile?.user?.name || currentUser?.name || '').trim();
+    }
+    if (settingsProfileContactInput) {
+      settingsProfileContactInput.value = String(profile?.user?.contact || currentUser?.contact || '').trim();
+    }
+    if (settingsProfileLabGroupInput) {
+      settingsProfileLabGroupInput.value = String(profile?.user?.labGroup || currentUser?.labGroup || '').trim();
+    }
+  }
+
   async function refreshFromRemoteUpdate() {
     if (!hasValidToken) return;
     if (updatesRefreshInFlight) {
@@ -3041,6 +4006,57 @@ def index() -> None:
       console.warn('Failed to claim token resources for user:', error);
       return null;
     }
+  }
+
+  function shortLinkedLabel(names, kind) {
+    if (!Array.isArray(names) || names.length === 0) return kind;
+    if (names.length === 1) return names[0];
+    return `${names[0]} (+${names.length - 1} more ${kind})`;
+  }
+
+  function requestLinkedRemovalDecision({ title, message, keepLabel, removeLabel }) {
+    return new Promise(resolve => {
+      if (!linkedRemovalDialog || !linkedRemovalKeep || !linkedRemovalRemove || !linkedRemovalMessage || !linkedRemovalTitle) {
+        resolve(window.confirm(message || 'Apply related removal?'));
+        return;
+      }
+
+      linkedRemovalTitle.textContent = title || 'Confirm Related Removal';
+      linkedRemovalMessage.textContent = message || '';
+      linkedRemovalKeep.textContent = keepLabel || 'Keep';
+      linkedRemovalRemove.textContent = removeLabel || 'Remove';
+
+      const cleanup = () => {
+        linkedRemovalDialog.removeEventListener('close', onClose);
+        linkedRemovalKeep.removeEventListener('click', onKeep);
+        linkedRemovalRemove.removeEventListener('click', onRemove);
+      };
+
+      const onClose = () => {
+        const shouldRemove = linkedRemovalDialog.returnValue === 'remove';
+        cleanup();
+        resolve(shouldRemove);
+      };
+
+      const onKeep = () => {
+        linkedRemovalDialog.returnValue = 'keep';
+        linkedRemovalDialog.close();
+      };
+
+      const onRemove = () => {
+        linkedRemovalDialog.returnValue = 'remove';
+        linkedRemovalDialog.close();
+      };
+
+      linkedRemovalDialog.returnValue = 'keep';
+      linkedRemovalDialog.addEventListener('close', onClose);
+      linkedRemovalKeep.addEventListener('click', onKeep);
+      linkedRemovalRemove.addEventListener('click', onRemove);
+      if (!linkedRemovalDialog.open) {
+        linkedRemovalDialog.showModal();
+      }
+      linkedRemovalKeep.focus();
+    });
   }
 
   function syncUserIdInUrl(user) {
@@ -3378,8 +4394,17 @@ def index() -> None:
   }
 
   function groupCalendars(calendars) {
+    const uniqueCalendars = [];
+    const seenCalendarIds = new Set();
+    for (const cal of calendars || []) {
+      const calendarId = String(cal && cal.id ? cal.id : '').trim();
+      if (!calendarId || seenCalendarIds.has(calendarId)) continue;
+      seenCalendarIds.add(calendarId);
+      uniqueCalendars.push(cal);
+    }
+
     const grouped = new Map();
-    for (const cal of calendars) {
+    for (const cal of uniqueCalendars) {
       const groupName = cal.group || 'General';
       if (!grouped.has(groupName)) grouped.set(groupName, []);
       grouped.get(groupName).push(cal);
@@ -3471,6 +4496,10 @@ def index() -> None:
     return Boolean(currentUser && currentUser.role === 'admin');
   }
 
+  function isServiceAccountUser() {
+    return Boolean(currentUser && currentUser.serviceAccount);
+  }
+
   async function logoutUser() {
     try {
       // Delete the user's link token from the database
@@ -3529,7 +4558,7 @@ def index() -> None:
   }
 
   async function preservePendingLinkForOauth(linkToken, calendarIds = null) {
-    if (!linkToken || isJwtToken(linkToken)) return;
+    if (!linkToken) return;
     const payload = { token: linkToken };
     if (Array.isArray(calendarIds)) {
       payload.calendarIds = calendarIds;
@@ -3549,25 +4578,146 @@ def index() -> None:
     window.location.replace(url.toString());
   }
 
+  function requestSaveToAccountAuthMethod() {
+    return new Promise(resolve => {
+      if (!saveAccountAuthDialog || !saveAccountAuthCancel || !saveAccountAuthPasskey || !saveAccountAuthGoogle) {
+        resolve('google');
+        return;
+      }
+
+      let resolved = false;
+      const finish = (choice) => {
+        if (resolved) return;
+        resolved = true;
+        saveAccountAuthDialog.returnValue = choice || 'cancel';
+        if (saveAccountAuthDialog.open) {
+          saveAccountAuthDialog.close();
+        }
+      };
+
+      const onClose = () => {
+        saveAccountAuthDialog.removeEventListener('close', onClose);
+        const value = String(saveAccountAuthDialog.returnValue || '').trim();
+        if (value === 'google' || value === 'passkey') {
+          resolve(value);
+          return;
+        }
+        resolve(null);
+      };
+
+      saveAccountAuthCancel.onclick = () => finish('cancel');
+      saveAccountAuthPasskey.onclick = () => finish('passkey');
+      saveAccountAuthGoogle.onclick = () => finish('google');
+      saveAccountAuthDialog.returnValue = 'cancel';
+      saveAccountAuthDialog.addEventListener('close', onClose);
+      if (!saveAccountAuthDialog.open) {
+        saveAccountAuthDialog.showModal();
+      }
+    });
+  }
+
+  async function authenticateWithPasskey() {
+    if (!window.PublicKeyCredential || !navigator.credentials || !navigator.credentials.get) {
+      throw new Error('This browser does not support passkey login.');
+    }
+
+    const optionsResult = await request('/api/passkeys/auth/options', 'POST', {}, false);
+    const publicKey = optionsResult?.publicKey;
+    const stateId = String(optionsResult?.stateId || '').trim();
+    if (!publicKey || !publicKey.challenge || !stateId) {
+      throw new Error('Invalid passkey login options from server.');
+    }
+
+    const assertionOptions = {
+      ...publicKey,
+      challenge: base64UrlToBuffer(publicKey.challenge),
+      allowCredentials: Array.isArray(publicKey.allowCredentials)
+        ? publicKey.allowCredentials.map((descriptor) => ({
+            ...descriptor,
+            id: base64UrlToBuffer(descriptor.id),
+          }))
+        : [],
+    };
+
+    const assertion = await navigator.credentials.get({ publicKey: assertionOptions });
+    if (!assertion) {
+      throw new Error('Passkey login was cancelled.');
+    }
+
+    const credentialPayload = {
+      id: assertion.id,
+      type: assertion.type,
+      rawId: bufferToBase64Url(assertion.rawId),
+      response: {
+        clientDataJSON: bufferToBase64Url(assertion.response.clientDataJSON),
+        authenticatorData: bufferToBase64Url(assertion.response.authenticatorData),
+        signature: bufferToBase64Url(assertion.response.signature),
+        userHandle: assertion.response.userHandle ? bufferToBase64Url(assertion.response.userHandle) : null,
+      },
+    };
+
+    return request('/api/passkeys/auth/verify', 'POST', {
+      stateId,
+      credential: credentialPayload,
+    }, false);
+  }
+
   async function handleTokenPageAction() {
     const calendarIdsToClaim = getTokenPageCalendarIdsToClaim();
     const sessionUser = currentUser && currentUser.id ? currentUser : null;
     const hasAuthenticatedSession = Boolean(sessionUser && authenticatedSessionToken);
     const sessionData = hasAuthenticatedSession ? { user: sessionUser, apiToken: authenticatedSessionToken } : await getSessionUser();
+    const originalLinkToken = sharedLinkToken || (currentToken && !isJwtToken(currentToken) ? currentToken : null);
 
     if (sessionData && sessionData.user && sessionData.apiToken) {
-      // Session exists - save the current calendar selection to the account.
+      // Session exists - either save directly to a normal account or hand off
+      // a token-only account into OAuth so it can be converted.
       try {
         currentUser = sessionData.user;
         syncUserIdInUrl(currentUser);
-        const claimResult = await claimTokenResourcesForLoggedInUser(currentToken, calendarIdsToClaim);
+        if (currentUser && currentUser.serviceAccount) {
+          const authMethod = await requestSaveToAccountAuthMethod();
+          if (!authMethod) {
+            return;
+          }
+
+          if (authMethod === 'google') {
+            await preservePendingLinkForOauth(originalLinkToken || currentToken, calendarIdsToClaim);
+            window.location.href = '/auth/google-login';
+            return;
+          }
+
+          const authResult = await authenticateWithPasskey();
+          if (!authResult?.authenticated || !authResult?.apiToken) {
+            throw new Error('Passkey login failed.');
+          }
+
+          const newSessionToken = String(authResult.apiToken || '').trim();
+          currentToken = newSessionToken;
+          authenticatedSessionToken = newSessionToken;
+          currentUser = authResult.user || null;
+          syncUserIdInUrl(currentUser);
+
+          const claimResult = await claimTokenResourcesForLoggedInUser(originalLinkToken || currentToken, calendarIdsToClaim);
+          redirectToUserOnlyUrl({ id: claimResult?.userId || currentUser?.id });
+          showSaveToast('Calendar updated', 'Calendar added to your account');
+          return;
+        }
+
+        if (currentUser && currentUser.isTokenOnlyAccount) {
+          await preservePendingLinkForOauth(originalLinkToken || currentToken, calendarIdsToClaim);
+          window.location.href = '/auth/google-login';
+          return;
+        }
+
+        const claimResult = await claimTokenResourcesForLoggedInUser(originalLinkToken || currentToken, calendarIdsToClaim);
         redirectToUserOnlyUrl({ id: claimResult?.userId || currentUser.id });
         showSaveToast('Calendar updated', 'Calendar added to your account');
       } catch (error) {
-        showErrorToast('Save failed', error.message);
+        showErrorToast('Save failed', error instanceof Error ? error.message : String(error));
       }
     } else {
-      await preservePendingLinkForOauth(currentToken, calendarIdsToClaim);
+      await preservePendingLinkForOauth(originalLinkToken, calendarIdsToClaim);
       // No session token - redirect to login
       window.location.href = '/auth/google-login';
     }
@@ -3598,11 +4748,37 @@ def index() -> None:
     if (showAccess && !accessCatalogData) {
       void loadAccessCatalog();
     }
+    if (showAccess) {
+      if (settingsProfileError) {
+        settingsProfileError.textContent = '';
+      }
+      void loadUserProfileSettings().catch((error) => {
+        if (settingsProfileError) {
+          settingsProfileError.textContent = error instanceof Error ? error.message : String(error);
+        }
+      });
+      renderOwnLoginLink('');
+      void getOwnLoginToken()
+        .then((result) => {
+          const loginUrl = String(result?.loginUrl || '').trim();
+          renderOwnLoginLink(loginUrl);
+        })
+        .catch(() => {
+          const existingLoginUrl = currentToken && !isJwtToken(currentToken)
+            ? `${window.location.origin}/?token=${encodeURIComponent(currentToken)}`
+            : '';
+          renderOwnLoginLink(existingLoginUrl);
+        });
+      void loadPasskeys();
+    }
     if (adminNavItem) {
       adminNavItem.classList.toggle('active', showAdmin);
     }
     if (accessNavItem) {
       accessNavItem.classList.toggle('active', showAccess);
+    }
+    if (calendarNavItem) {
+      calendarNavItem.classList.toggle('active', showCalendar);
     }
   }
 
@@ -3610,6 +4786,261 @@ def index() -> None:
     if (state === 'granted' || state === 'approved') return 'Approved';
     if (state === 'pending' || state === 'requested' || state === 'group-pending') return 'Requested';
     return 'Request access';
+  }
+
+  function base64UrlToBuffer(value) {
+    const input = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+    const padLen = (4 - (input.length % 4)) % 4;
+    const padded = input + '='.repeat(padLen);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  function bufferToBase64Url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+  }
+
+  function formatPasskeyDate(iso) {
+    if (!iso) return 'unknown date';
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return 'unknown date';
+    return parsed.toLocaleString();
+  }
+
+  function renderPasskeyList() {
+    if (!passkeyList) return;
+    passkeyList.innerHTML = '';
+    if (!Array.isArray(userPasskeys) || userPasskeys.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.className = 'admin-helper';
+      emptyState.textContent = 'No passkeys created yet.';
+      passkeyList.appendChild(emptyState);
+      return;
+    }
+    for (const passkey of userPasskeys) {
+      const pill = document.createElement('span');
+      pill.className = 'admin-pill';
+      const shortId = String(passkey.credentialId || '').slice(0, 10) || 'unknown';
+      const label = document.createElement('span');
+      label.textContent = `${passkey.name || 'Passkey'} (${shortId}..., ${formatPasskeyDate(passkey.createdAt)})`;
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'admin-pill-remove';
+      removeButton.title = `Remove ${passkey.name || 'passkey'}`;
+      removeButton.textContent = 'x';
+      removeButton.onclick = async () => {
+        try {
+          await request(`/api/passkeys/${encodeURIComponent(passkey.credentialId)}`, 'DELETE');
+          showSaveToast('Passkey removed', `${passkey.name || 'Passkey'} removed.`);
+          await loadPasskeys();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          showErrorToast('Passkey remove failed', message, accessPanel || document.body);
+        }
+      };
+      pill.append(label, removeButton);
+      passkeyList.appendChild(pill);
+    }
+  }
+
+  async function loadPasskeys() {
+    if (!hasValidToken && !currentToken) {
+      userPasskeys = [];
+      renderPasskeyList();
+      return;
+    }
+    try {
+      const response = await request('/api/passkeys');
+      userPasskeys = Array.isArray(response?.passkeys) ? response.passkeys : [];
+    } catch (error) {
+      userPasskeys = [];
+      console.warn('Failed to load passkeys:', error);
+    }
+    renderPasskeyList();
+  }
+
+  function renderOwnLoginLink(value = '') {
+    if (!ownLoginLinkAnchor || !ownLoginLinkCopy) return;
+    const normalized = String(value || '').trim();
+    ownLoginLinkAnchor.href = normalized || '#';
+    ownLoginLinkAnchor.textContent = normalized || 'No login URL';
+    if (!normalized) {
+      ownLoginLinkAnchor.setAttribute('aria-disabled', 'true');
+      ownLoginLinkAnchor.style.pointerEvents = 'none';
+      ownLoginLinkAnchor.style.opacity = '0.65';
+      ownLoginLinkCopy.setAttribute('aria-disabled', 'true');
+      return;
+    }
+    ownLoginLinkAnchor.removeAttribute('aria-disabled');
+    ownLoginLinkAnchor.style.pointerEvents = '';
+    ownLoginLinkAnchor.style.opacity = '';
+    ownLoginLinkCopy.removeAttribute('aria-disabled');
+  }
+
+  async function regenerateOwnLoginLink() {
+    const result = await regenerateOwnLoginToken();
+    const nextUrl = String(result?.loginUrl || '').trim();
+    renderOwnLoginLink(nextUrl);
+    await loadShareLinks();
+    showSaveToast('Login string regenerated', nextUrl || 'Your login string was regenerated.');
+  }
+
+  function renderShareLinks() {
+    if (!shareLinksList) return;
+    shareLinksList.innerHTML = '';
+    const links = Array.isArray(shareLinksData) ? shareLinksData : [];
+    if (links.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'share-link-empty';
+      empty.textContent = isServiceAccountUser()
+        ? 'No share link is available for this service account.'
+        : 'No eligible service-account links match your approved groups.';
+      shareLinksList.appendChild(empty);
+      return;
+    }
+    for (const link of links) {
+      const row = document.createElement('div');
+      row.className = 'share-link-row';
+      const name = document.createElement('div');
+      name.className = 'share-link-name';
+      name.textContent = String(link.name || 'Share link');
+      const anchor = document.createElement('a');
+      anchor.href = String(link.loginUrl || '#');
+      anchor.textContent = String(link.loginUrl || 'No login URL');
+      anchor.target = '_blank';
+      anchor.rel = 'noreferrer noopener';
+
+      const groupsWrap = document.createElement('div');
+      groupsWrap.className = 'admin-helper';
+      groupsWrap.style.display = 'grid';
+      groupsWrap.style.gap = '4px';
+
+      const groups = Array.isArray(link.groups) ? link.groups : [];
+      if (groups.length > 0) {
+        for (const group of groups) {
+          const groupName = String(group?.name || '').trim();
+          if (!groupName) continue;
+          const calendars = Array.isArray(group?.calendars) ? group.calendars : [];
+          const calendarNames = calendars
+            .map((calendar) => String(calendar?.name || '').trim())
+            .filter((value) => value);
+          const groupLine = document.createElement('div');
+          groupLine.textContent = calendarNames.length > 0
+            ? `${groupName}: ${calendarNames.join(', ')}`
+            : `${groupName}: (no calendars)`;
+          groupsWrap.appendChild(groupLine);
+        }
+      }
+
+      const copy = document.createElement('a');
+      copy.href = '#';
+      copy.className = 'admin-inline-link';
+      copy.textContent = 'Copy to clipboard';
+      copy.onclick = async (event) => {
+        event.preventDefault();
+        try {
+          await navigator.clipboard.writeText(String(link.loginUrl || ''));
+          showSaveToast('Copied', 'Share link copied to clipboard.');
+        } catch (error) {
+          showErrorToast('Copy failed', error instanceof Error ? error.message : String(error));
+        }
+      };
+      row.append(name, anchor, groupsWrap, copy);
+      shareLinksList.appendChild(row);
+    }
+  }
+
+  async function loadShareLinks() {
+    if (!currentUser) {
+      shareLinksData = [];
+      renderShareLinks();
+      return;
+    }
+    try {
+      const result = await request('/api/share-links');
+      shareLinksData = Array.isArray(result?.links) ? result.links : [];
+    } catch (error) {
+      shareLinksData = [];
+      console.warn('Failed to load share links:', error);
+    }
+    renderShareLinks();
+  }
+
+  async function openShareLinksDialog() {
+    await loadShareLinks();
+    if (shareLinksDialog && !shareLinksDialog.open) {
+      shareLinksDialog.showModal();
+    }
+  }
+
+  async function createPasskeyFromSettings() {
+    if (!window.PublicKeyCredential || !navigator.credentials || !navigator.credentials.create) {
+      showErrorToast('Passkey unavailable', 'This browser does not support passkey creation.', accessPanel || document.body);
+      return;
+    }
+
+    if (createPasskeyButton) createPasskeyButton.disabled = true;
+    try {
+      const passkeyName = String(passkeyNameInput?.value || '').trim();
+      const optionsResult = await request('/api/passkeys/register/options', 'POST', {});
+      const publicKey = optionsResult?.publicKey;
+      if (!publicKey || !publicKey.challenge || !publicKey.user || !publicKey.user.id) {
+        throw new Error('Invalid passkey options from server.');
+      }
+
+      const credentialCreationOptions = {
+        ...publicKey,
+        challenge: base64UrlToBuffer(publicKey.challenge),
+        user: {
+          ...publicKey.user,
+          id: base64UrlToBuffer(publicKey.user.id),
+        },
+        excludeCredentials: Array.isArray(publicKey.excludeCredentials)
+          ? publicKey.excludeCredentials.map((descriptor) => ({
+              ...descriptor,
+              id: base64UrlToBuffer(descriptor.id),
+            }))
+          : [],
+      };
+
+      const credential = await navigator.credentials.create({ publicKey: credentialCreationOptions });
+      if (!credential) {
+        throw new Error('Passkey creation was cancelled.');
+      }
+
+      const credentialPayload = {
+        id: credential.id,
+        type: credential.type,
+        rawId: bufferToBase64Url(credential.rawId),
+        response: {
+          clientDataJSON: bufferToBase64Url(credential.response.clientDataJSON),
+          attestationObject: bufferToBase64Url(credential.response.attestationObject),
+          transports: typeof credential.response.getTransports === 'function' ? credential.response.getTransports() : [],
+        },
+      };
+
+      await request('/api/passkeys/register/verify', 'POST', {
+        credential: credentialPayload,
+        passkeyName,
+      });
+      showSaveToast('Passkey created', 'You can now use this passkey for sign-in.');
+      if (passkeyNameInput) passkeyNameInput.value = '';
+      await loadPasskeys();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showErrorToast('Passkey setup failed', message, accessPanel || document.body);
+    } finally {
+      if (createPasskeyButton) createPasskeyButton.disabled = false;
+    }
   }
 
   async function requestAccess(targetType, targetId, label) {
@@ -3784,6 +5215,24 @@ def index() -> None:
     });
   }
 
+  async function regenerateOwnLoginToken() {
+    return request('/api/users/me/login-token/regenerate', 'POST', {});
+  }
+
+  async function getOwnLoginToken() {
+    return request('/api/users/me/login-token', 'GET');
+  }
+
+  async function regenerateAdminUserLoginToken(userId) {
+    return request(`/api/admin/users/${encodeURIComponent(userId)}/login-token/regenerate`, 'POST', {});
+  }
+
+  async function updateAdminUserServiceAccount(userId, serviceAccount) {
+    return request(`/api/admin/users/${encodeURIComponent(userId)}/service-account`, 'PUT', {
+      serviceAccount: Boolean(serviceAccount),
+    });
+  }
+
   async function createAdminGroup(name) {
     return request('/api/admin/groups', 'POST', { name });
   }
@@ -3802,6 +5251,10 @@ def index() -> None:
 
   async function updateAdminCalendarGroup(calendarId, groupName) {
     return request(`/api/admin/calendars/${encodeURIComponent(calendarId)}/group`, 'PUT', { groupName });
+  }
+
+  async function removeAdminCalendarFromGroup(calendarId, groupName) {
+    return request(`/api/admin/calendars/${encodeURIComponent(calendarId)}/groups/${encodeURIComponent(groupName)}`, 'DELETE');
   }
 
   let pendingGroupResourceCreateResolve = null;
@@ -4047,19 +5500,20 @@ def index() -> None:
           const pill = document.createElement('span');
           pill.className = 'admin-pill';
           pill.textContent = `${resource.name}`;
-          if (group.name !== 'General') {
+          const canRemoveFromThisGroup = true;
+          if (canRemoveFromThisGroup) {
             const removeButton = document.createElement('button');
             removeButton.type = 'button';
             removeButton.className = 'admin-pill-remove';
-            removeButton.title = 'Move back to General';
-            removeButton.textContent = '×';
+            removeButton.title = `Remove ${resource.name} from ${group.name}`;
+            removeButton.textContent = 'x';
             removeButton.onclick = async () => {
               try {
-                await updateAdminCalendarGroup(resource.id, 'General');
-                showSaveToast('Resource moved', `${resource.name} moved to General.`);
+                await removeAdminCalendarFromGroup(resource.id, group.name);
+                showSaveToast('Resource updated', `${resource.name} removed from ${group.name}.`);
                 await loadAdminData();
               } catch (error) {
-                showSaveToast('Move failed', error instanceof Error ? error.message : String(error));
+                showSaveToast('Remove failed', error instanceof Error ? error.message : String(error));
               }
             };
 
@@ -4185,50 +5639,33 @@ def index() -> None:
     userCreateResourceInput.className = 'admin-datalist-input';
     const userCreateListId = 'admin-user-create-options';
     userCreateResourceInput.setAttribute('list', userCreateListId);
-    userCreateResourceInput.placeholder = 'Optional: add calendar access before create';
+    userCreateResourceInput.placeholder = 'Optional: add calendar or group access before create';
 
     const userCreateList = document.createElement('datalist');
     userCreateList.id = userCreateListId;
+    for (const group of adminGroups) {
+      const option = document.createElement('option');
+      option.value = `Group: ${group.name}`;
+      userCreateList.appendChild(option);
+    }
     for (const resource of userResources) {
       const option = document.createElement('option');
-      option.value = resource.name;
-      option.label = `${resource.group} resource`;
+      option.value = `Calendar: ${resource.name}`;
       userCreateList.appendChild(option);
     }
 
     const stagedUserResourceIds = [];
-    const stagedUserResourcePills = document.createElement('div');
-    stagedUserResourcePills.className = 'admin-resource-pills';
-    const renderStagedUserResourcePills = () => {
-      stagedUserResourcePills.innerHTML = '';
+    const stagedUserGroupNames = [];
+    const stagedUserAccessPills = document.createElement('div');
+    stagedUserAccessPills.className = 'admin-resource-pills';
+    const renderStagedUserAccessPills = () => {
+      stagedUserAccessPills.innerHTML = '';
       for (const resourceId of stagedUserResourceIds) {
         const pill = document.createElement('span');
         pill.className = 'admin-pill';
         pill.textContent = resourceName(resourceId);
-        stagedUserResourcePills.appendChild(pill);
+        stagedUserAccessPills.appendChild(pill);
       }
-    };
-
-    const userCreateGroupInput = document.createElement('input');
-    userCreateGroupInput.className = 'admin-datalist-input';
-    const userCreateGroupListId = 'admin-user-create-group-options';
-    userCreateGroupInput.setAttribute('list', userCreateGroupListId);
-    userCreateGroupInput.placeholder = 'Optional: add group membership before create';
-
-    const userCreateGroupList = document.createElement('datalist');
-    userCreateGroupList.id = userCreateGroupListId;
-    for (const group of adminGroups) {
-      const option = document.createElement('option');
-      option.value = group.name;
-      option.label = `${group.name} group`;
-      userCreateGroupList.appendChild(option);
-    }
-
-    const stagedUserGroupNames = [];
-    const stagedUserGroupPills = document.createElement('div');
-    stagedUserGroupPills.className = 'admin-resource-pills';
-    const renderStagedUserGroupPills = () => {
-      stagedUserGroupPills.innerHTML = '';
       for (const groupName of stagedUserGroupNames) {
         const pill = document.createElement('span');
         pill.className = 'admin-pill';
@@ -4245,89 +5682,62 @@ def index() -> None:
         removeButton.onclick = () => {
           const nextGroups = stagedUserGroupNames.filter(name => name !== groupName);
           stagedUserGroupNames.splice(0, stagedUserGroupNames.length, ...nextGroups);
-          renderStagedUserGroupPills();
+          renderStagedUserAccessPills();
         };
 
         pill.append(label, removeButton);
-        stagedUserGroupPills.appendChild(pill);
+        stagedUserAccessPills.appendChild(pill);
       }
     };
 
-    const stageUserGroupButton = document.createElement('button');
-    stageUserGroupButton.type = 'button';
-    stageUserGroupButton.className = 'btn btn-neutral';
-    stageUserGroupButton.textContent = 'Stage Group';
-    stageUserGroupButton.onclick = () => {
-      const value = userCreateGroupInput.value.trim();
-      if (!value) return;
-      const matchedGroup = adminGroups.find(group => group.name.toLowerCase() === value.toLowerCase());
-      if (!matchedGroup) {
-        showSaveToast('Not found', `No group matches "${value}".`);
-        return;
-      }
-      if (!stagedUserGroupNames.includes(matchedGroup.name)) {
-        stagedUserGroupNames.push(matchedGroup.name);
-        stagedUserGroupNames.sort((left, right) => left.localeCompare(right));
-      }
-      userCreateGroupInput.value = '';
-      renderStagedUserGroupPills();
-    };
-
-    const stageUserResourceButton = document.createElement('button');
-    stageUserResourceButton.type = 'button';
-    stageUserResourceButton.className = 'btn btn-neutral';
-    stageUserResourceButton.textContent = 'Stage Resource';
-    stageUserResourceButton.onclick = () => {
+    const stageUserAccessButton = document.createElement('button');
+    stageUserAccessButton.type = 'button';
+    stageUserAccessButton.className = 'btn btn-neutral';
+    stageUserAccessButton.textContent = 'Add Access';
+    stageUserAccessButton.onclick = () => {
       const value = userCreateResourceInput.value.trim();
       if (!value) return;
 
-      const matched = userResources.find(resource => resource.name.toLowerCase() === value.toLowerCase());
-      if (!matched) {
-        showSaveToast('Not found', `No calendar matches "${value}".`);
+      const normalized = value.toLowerCase();
+      const groupPrefix = 'group:';
+      const calendarPrefix = 'calendar:';
+      const groupLookup = normalized.startsWith(groupPrefix)
+        ? value.slice(groupPrefix.length).trim()
+        : value;
+      const calendarLookup = normalized.startsWith(calendarPrefix)
+        ? value.slice(calendarPrefix.length).trim()
+        : value;
+
+      let matchedGroup = null;
+      let matchedCalendar = null;
+      if (!normalized.startsWith(calendarPrefix)) {
+        matchedGroup = adminGroups.find(group => group.name.toLowerCase() === groupLookup.toLowerCase()) || null;
+      }
+      if (!normalized.startsWith(groupPrefix)) {
+        matchedCalendar = userResources.find(resource => resource.name.toLowerCase() === calendarLookup.toLowerCase()) || null;
+      }
+
+      if (!matchedGroup && !matchedCalendar) {
+        showSaveToast('Not found', `No group or calendar matches "${value}".`);
         return;
       }
 
-      if (!stagedUserResourceIds.includes(matched.id)) {
-        stagedUserResourceIds.push(matched.id);
+      if (matchedGroup && !stagedUserGroupNames.includes(matchedGroup.name)) {
+        stagedUserGroupNames.push(matchedGroup.name);
+        stagedUserGroupNames.sort((left, right) => left.localeCompare(right));
+      }
+      if (matchedCalendar && !stagedUserResourceIds.includes(matchedCalendar.id)) {
+        stagedUserResourceIds.push(matchedCalendar.id);
       }
       stagedUserResourceIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
       userCreateResourceInput.value = '';
-      renderStagedUserResourcePills();
+      renderStagedUserAccessPills();
     };
 
     const createUserButton = document.createElement('button');
     createUserButton.type = 'button';
     createUserButton.className = 'btn btn-primary';
     createUserButton.textContent = 'Create User';
-
-    const userCreateUrlRow = document.createElement('div');
-    userCreateUrlRow.className = 'admin-editor-row';
-
-    const userCreateUrlOutput = document.createElement('input');
-    userCreateUrlOutput.className = 'admin-datalist-input';
-    userCreateUrlOutput.placeholder = 'Login URL will appear here after user creation';
-    userCreateUrlOutput.readOnly = true;
-
-    const copyUserCreateUrlButton = document.createElement('button');
-    copyUserCreateUrlButton.type = 'button';
-    copyUserCreateUrlButton.className = 'btn btn-neutral';
-    copyUserCreateUrlButton.textContent = 'Copy Login URL';
-    copyUserCreateUrlButton.disabled = true;
-    copyUserCreateUrlButton.onclick = async () => {
-      const loginUrl = userCreateUrlOutput.value.trim();
-      if (!loginUrl) {
-        showSaveToast('No URL yet', 'Create a user first to generate a login URL.');
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(loginUrl);
-        showSaveToast('Copied', 'Login URL copied to clipboard.');
-      } catch {
-        showSaveToast('Copy failed', 'Could not access clipboard. Copy the URL manually.');
-      }
-    };
-
-    userCreateUrlRow.append(userCreateUrlOutput, copyUserCreateUrlButton);
 
     createUserButton.onclick = async () => {
       const name = userCreateNameInput.value.trim();
@@ -4340,50 +5750,31 @@ def index() -> None:
       const created = await createAdminUser(name, email, stagedUserResourceIds, stagedUserGroupNames);
       const loginUrl = created && created.loginUrl ? created.loginUrl : '';
       const tokenValue = created && created.token ? created.token : 'unknown';
-      if (loginUrl) {
-        userCreateUrlOutput.value = loginUrl;
-        copyUserCreateUrlButton.disabled = false;
-      }
       showSaveToast('User created', loginUrl || `Login token: ${tokenValue}`);
 
       userCreateNameInput.value = '';
       userCreateEmailInput.value = '';
       userCreateResourceInput.value = '';
-      userCreateGroupInput.value = '';
       stagedUserResourceIds.splice(0, stagedUserResourceIds.length);
       stagedUserGroupNames.splice(0, stagedUserGroupNames.length);
-      renderStagedUserResourcePills();
-      renderStagedUserGroupPills();
+      renderStagedUserAccessPills();
       await loadAdminData();
     };
 
     const userCreateButtons = document.createElement('div');
     userCreateButtons.className = 'btn-group';
-    userCreateButtons.append(stageUserResourceButton, createUserButton);
+    userCreateButtons.append(stageUserAccessButton, createUserButton);
 
     const userCreateResourceRow = document.createElement('div');
     userCreateResourceRow.className = 'admin-editor-row';
     userCreateResourceRow.append(userCreateResourceInput, userCreateButtons);
-
-    const userCreateGroupRow = document.createElement('div');
-    userCreateGroupRow.className = 'admin-editor-row';
-    userCreateGroupRow.append(userCreateGroupInput, stageUserGroupButton);
-
-    const userCreateHelper = document.createElement('div');
-    userCreateHelper.className = 'admin-helper';
-    userCreateHelper.textContent = 'Creates a local user with a generated login token. Share the token for direct login access, and stage group membership to grant calendar access dynamically.';
 
     userCreateCard.append(
       userCreateTitle,
       userCreateRow,
       userCreateList,
       userCreateResourceRow,
-      stagedUserResourcePills,
-      userCreateGroupRow,
-      userCreateGroupList,
-      stagedUserGroupPills,
-      userCreateUrlRow,
-      userCreateHelper,
+      stagedUserAccessPills,
     );
     adminUserGrid.appendChild(userCreateCard);
 
@@ -4396,6 +5787,9 @@ def index() -> None:
       const selectedGroupNames = Array.isArray(user.groupNames)
         ? [...user.groupNames]
         : (user.groupName ? [user.groupName] : []);
+      const calendarsByGroupName = new Map(
+        (adminGroups || []).map(group => [group.name, new Set(Array.isArray(group.calendarIds) ? group.calendarIds : [])]),
+      );
 
       const head = document.createElement('div');
       head.className = 'admin-link-head';
@@ -4417,27 +5811,110 @@ def index() -> None:
       loginLink.textContent = user.loginUrl || 'No login URL';
       loginLink.target = '_blank';
       loginLink.rel = 'noreferrer noopener';
+      const copyLoginLink = document.createElement('a');
+      copyLoginLink.href = '#';
+      copyLoginLink.className = 'admin-inline-link';
+      copyLoginLink.textContent = 'Copy to clipboard';
+      const syncLoginLinkActions = () => {
+        const hasUrl = Boolean(user.loginUrl);
+        if (!hasUrl) {
+          loginLink.setAttribute('aria-disabled', 'true');
+          loginLink.style.pointerEvents = 'none';
+          loginLink.style.opacity = '0.65';
+          copyLoginLink.setAttribute('aria-disabled', 'true');
+          return;
+        }
+        loginLink.removeAttribute('aria-disabled');
+        loginLink.style.pointerEvents = '';
+        loginLink.style.opacity = '';
+        copyLoginLink.removeAttribute('aria-disabled');
+      };
+      copyLoginLink.onclick = async (event) => {
+        event.preventDefault();
+        if (!user.loginUrl) {
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(user.loginUrl);
+          showSaveToast('Copied', 'Login link copied to clipboard.');
+        } catch (error) {
+          showErrorToast('Copy failed', error instanceof Error ? error.message : String(error));
+        }
+      };
       if (!user.loginUrl) {
-        loginLink.setAttribute('aria-disabled', 'true');
-        loginLink.style.pointerEvents = 'none';
-        loginLink.style.opacity = '0.65';
+        copyLoginLink.setAttribute('aria-disabled', 'true');
       }
-      loginLinkWrap.append(loginLink);
+      syncLoginLinkActions();
+      loginLinkWrap.append(loginLink, copyLoginLink);
 
-      titleWrap.append(title, emailLine, meta, loginLinkWrap);
+      const regenerateLoginLinkButton = document.createElement('button');
+      regenerateLoginLinkButton.type = 'button';
+      regenerateLoginLinkButton.className = 'btn btn-neutral';
+      regenerateLoginLinkButton.textContent = 'Regenerate login string';
+      regenerateLoginLinkButton.onclick = async () => {
+        const oldLabel = regenerateLoginLinkButton.textContent;
+        regenerateLoginLinkButton.disabled = true;
+        regenerateLoginLinkButton.textContent = 'Regenerating...';
+        try {
+          const result = await regenerateAdminUserLoginToken(user.id);
+          const nextToken = String(result?.loginToken || '').trim();
+          const nextUrl = String(result?.loginUrl || '').trim();
+          user.loginToken = nextToken;
+          user.loginUrl = nextUrl;
+          loginLink.href = nextUrl || '#';
+          loginLink.textContent = nextUrl || 'No login URL';
+          syncLoginLinkActions();
+          showSaveToast('Login string regenerated', `${user.name || user.email || 'User'} now has a new login link.`);
+        } catch (error) {
+          showErrorToast('Regenerate failed', error instanceof Error ? error.message : String(error));
+        } finally {
+          regenerateLoginLinkButton.disabled = false;
+          regenerateLoginLinkButton.textContent = oldLabel;
+        }
+      };
+
+      titleWrap.append(title, emailLine, meta, loginLinkWrap, regenerateLoginLinkButton);
 
       const roleBadge = document.createElement('span');
       roleBadge.className = `admin-user-role ${user.role === 'admin' ? 'admin' : 'user'}`;
       roleBadge.textContent = user.role || 'user';
 
+      const accountModeWrap = document.createElement('label');
+      accountModeWrap.className = 'admin-helper';
+      accountModeWrap.style.display = 'inline-flex';
+      accountModeWrap.style.alignItems = 'center';
+      accountModeWrap.style.gap = '8px';
+
+      const accountModeToggle = document.createElement('input');
+      accountModeToggle.type = 'checkbox';
+      accountModeToggle.checked = Boolean(user.serviceAccount);
+
+      const accountModeLabel = document.createElement('span');
+      accountModeLabel.textContent = 'Service account';
+
+      accountModeWrap.append(accountModeToggle, accountModeLabel);
+      accountModeToggle.addEventListener('change', async () => {
+        const nextValue = Boolean(accountModeToggle.checked);
+        accountModeToggle.disabled = true;
+        try {
+          await updateAdminUserServiceAccount(user.id, nextValue);
+          user.serviceAccount = nextValue;
+          showSaveToast('Account type updated', nextValue ? 'Service account enabled.' : 'Service account disabled.');
+          if (currentUser && currentUser.id === user.id) {
+            currentUser.serviceAccount = nextValue;
+            renderSidebar();
+          }
+        } catch (error) {
+          accountModeToggle.checked = Boolean(user.serviceAccount);
+          showErrorToast('Update failed', error instanceof Error ? error.message : String(error));
+        } finally {
+          accountModeToggle.disabled = false;
+        }
+      });
+
       const calendarSectionTitle = document.createElement('div');
       calendarSectionTitle.className = 'admin-section-title';
       calendarSectionTitle.textContent = 'Calendar access';
-      const allResourcesTitle = document.createElement('div');
-      allResourcesTitle.className = 'admin-section-title';
-      allResourcesTitle.textContent = 'All calendars';
-      const allResourcesCatalog = document.createElement('div');
-      allResourcesCatalog.className = 'admin-resource-catalog';
 
       const calendarPills = document.createElement('div');
       calendarPills.className = 'admin-resource-pills';
@@ -4457,12 +5934,31 @@ def index() -> None:
           removeButton.setAttribute('aria-label', removeButton.title);
           removeButton.textContent = 'x';
           removeButton.onclick = async () => {
+            const linkedGroups = selectedGroupNames.filter(groupName => {
+              const groupCalendarIds = calendarsByGroupName.get(groupName);
+              return groupCalendarIds ? groupCalendarIds.has(resourceId) : false;
+            });
+            let nextGroupNames = [...selectedGroupNames];
+            if (linkedGroups.length > 0) {
+              const removeLinkedGroups = await requestLinkedRemovalDecision({
+                title: 'Calendar Also Granted By Group',
+                message: `"${resourceName(resourceId)}" is also granted by group membership: ${linkedGroups.join(', ')}.`,
+                keepLabel: `Keep ${shortLinkedLabel(linkedGroups, 'groups')}`,
+                removeLabel: `Remove ${shortLinkedLabel(linkedGroups, 'groups')}`,
+              });
+              if (removeLinkedGroups) {
+                nextGroupNames = selectedGroupNames.filter(groupName => !linkedGroups.includes(groupName));
+              }
+            }
             const nextIds = selectedIds.filter(id => id !== resourceId);
             selectedIds.splice(0, selectedIds.length, ...nextIds);
+            selectedGroupNames.splice(0, selectedGroupNames.length, ...nextGroupNames);
             await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
             user.calendarIds = [...selectedIds];
+            user.groupNames = [...selectedGroupNames];
+            user.groupName = selectedGroupNames[0] || null;
             renderCalendarPills();
-            renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+            renderGroupPills();
           };
 
           pill.append(label, removeButton);
@@ -4492,11 +5988,29 @@ def index() -> None:
           removeButton.setAttribute('aria-label', removeButton.title);
           removeButton.textContent = 'x';
           removeButton.onclick = async () => {
+            const calendarsFromGroup = Array.from(calendarsByGroupName.get(groupName) || []);
+            const linkedDirectCalendars = selectedIds.filter(calendarId => calendarsFromGroup.includes(calendarId));
+            let nextIds = [...selectedIds];
+            if (linkedDirectCalendars.length > 0) {
+              const linkedCalendarNames = linkedDirectCalendars.map(calendarId => resourceName(calendarId));
+              const removeLinkedCalendars = await requestLinkedRemovalDecision({
+                title: 'Group Includes Direct Calendars',
+                message: `"${groupName}" also contains directly assigned calendars: ${linkedCalendarNames.join(', ')}.`,
+                keepLabel: `Keep ${shortLinkedLabel(linkedCalendarNames, 'calendars')}`,
+                removeLabel: `Remove ${shortLinkedLabel(linkedCalendarNames, 'calendars')}`,
+              });
+              if (removeLinkedCalendars) {
+                nextIds = selectedIds.filter(calendarId => !linkedDirectCalendars.includes(calendarId));
+              }
+            }
             const nextGroups = selectedGroupNames.filter(name => name !== groupName);
+            selectedIds.splice(0, selectedIds.length, ...nextIds);
             selectedGroupNames.splice(0, selectedGroupNames.length, ...nextGroups);
             await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
+            user.calendarIds = [...selectedIds];
             user.groupNames = [...selectedGroupNames];
             user.groupName = selectedGroupNames[0] || null;
+            renderCalendarPills();
             renderGroupPills();
           };
 
@@ -4505,64 +6019,25 @@ def index() -> None:
         }
       };
 
-      const groupEditorRow = document.createElement('div');
-      groupEditorRow.className = 'admin-editor-row';
-
-      const groupInput = document.createElement('input');
-      const groupDatalistId = `admin-user-group-options-${user.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-      groupInput.className = 'admin-datalist-input';
-      groupInput.setAttribute('list', groupDatalistId);
-      groupInput.placeholder = 'Type a group name';
-
-      const groupDatalist = document.createElement('datalist');
-      groupDatalist.id = groupDatalistId;
-      for (const group of adminGroups) {
-        const option = document.createElement('option');
-        option.value = group.name;
-        option.label = `${group.name} group`;
-        groupDatalist.appendChild(option);
-      }
-
-      const addGroupButton = document.createElement('button');
-      addGroupButton.type = 'button';
-      addGroupButton.className = 'btn btn-primary';
-      addGroupButton.textContent = 'Add Group';
-      addGroupButton.onclick = async () => {
-        const value = groupInput.value.trim();
-        if (!value) return;
-        const matchedGroup = adminGroups.find(group => group.name.toLowerCase() === value.toLowerCase());
-        if (!matchedGroup) {
-          showSaveToast('Not found', `No group matches "${value}".`);
-          return;
-        }
-        if (!selectedGroupNames.includes(matchedGroup.name)) {
-          selectedGroupNames.push(matchedGroup.name);
-          selectedGroupNames.sort((left, right) => left.localeCompare(right));
-        }
-        groupInput.value = '';
-        await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
-        user.groupNames = [...selectedGroupNames];
-        user.groupName = selectedGroupNames[0] || null;
-        renderGroupPills();
-      };
-
-      groupEditorRow.append(groupInput, addGroupButton);
-
       const editorRow = document.createElement('div');
       editorRow.className = 'admin-editor-row';
 
       const input = document.createElement('input');
-      const datalistId = `admin-user-resource-options-${user.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      const datalistId = `admin-user-access-options-${user.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
       input.className = 'admin-datalist-input';
       input.setAttribute('list', datalistId);
-      input.placeholder = 'Type a calendar name';
+      input.placeholder = 'Type a group or calendar name';
 
       const datalist = document.createElement('datalist');
       datalist.id = datalistId;
+      for (const group of adminGroups) {
+        const option = document.createElement('option');
+        option.value = `Group: ${group.name}`;
+        datalist.appendChild(option);
+      }
       for (const resource of userResources) {
         const option = document.createElement('option');
-        option.value = resource.name;
-        option.label = `${resource.group} resource`;
+        option.value = `Calendar: ${resource.name}`;
         datalist.appendChild(option);
       }
 
@@ -4574,87 +6049,65 @@ def index() -> None:
         const value = input.value.trim();
         if (!value) return;
 
-        const matched = userResources.find(resource => resource.name.toLowerCase() === value.toLowerCase());
-        if (!matched) {
-          showSaveToast('Not found', `No calendar matches "${value}".`);
+        const normalized = value.toLowerCase();
+        const groupPrefix = 'group:';
+        const calendarPrefix = 'calendar:';
+        const groupLookup = normalized.startsWith(groupPrefix)
+          ? value.slice(groupPrefix.length).trim()
+          : value;
+        const calendarLookup = normalized.startsWith(calendarPrefix)
+          ? value.slice(calendarPrefix.length).trim()
+          : value;
+
+        let groupMatched = null;
+        let calendarMatched = null;
+        if (!normalized.startsWith(calendarPrefix)) {
+          groupMatched = adminGroups.find(group => group.name.toLowerCase() === groupLookup.toLowerCase()) || null;
+        }
+        if (!normalized.startsWith(groupPrefix)) {
+          calendarMatched = userResources.find(resource => resource.name.toLowerCase() === calendarLookup.toLowerCase()) || null;
+        }
+
+        if (!groupMatched && !calendarMatched) {
+          showSaveToast('Not found', `No group or calendar matches "${value}".`);
           return;
         }
 
-        if (!selectedIds.includes(matched.id)) selectedIds.push(matched.id);
-        selectedIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
+        if (groupMatched && !selectedGroupNames.includes(groupMatched.name)) {
+          selectedGroupNames.push(groupMatched.name);
+          selectedGroupNames.sort((left, right) => left.localeCompare(right));
+        }
+        if (calendarMatched && !selectedIds.includes(calendarMatched.id)) {
+          selectedIds.push(calendarMatched.id);
+          selectedIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
+        }
+
         await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
         user.calendarIds = [...selectedIds];
+        user.groupNames = [...selectedGroupNames];
+        user.groupName = selectedGroupNames[0] || null;
         renderCalendarPills();
-        renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
+        renderGroupPills();
         input.value = '';
       };
-
-      const assignResourceToUser = async resourceId => {
-        if (selectedIds.includes(resourceId)) return;
-        selectedIds.push(resourceId);
-        selectedIds.sort((left, right) => resourceName(left).localeCompare(resourceName(right)));
-        await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
-        user.calendarIds = [...selectedIds];
-        renderCalendarPills();
-        renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
-      };
-
-      renderResourceCatalog(allResourcesCatalog, userResources, selectedIds, assignResourceToUser);
-
-      const quickAddGroupsTitle = document.createElement('div');
-      quickAddGroupsTitle.className = 'admin-section-title';
-      quickAddGroupsTitle.textContent = 'Quick add group membership';
-      const quickAddGroupsContainer = document.createElement('div');
-      quickAddGroupsContainer.className = 'admin-resource-catalog';
-      for (const group of adminGroups) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'admin-resource-option';
-        const alreadyAdded = selectedGroupNames.includes(group.name);
-        if (alreadyAdded) {
-          button.classList.add('assigned');
-          button.disabled = true;
-          button.setAttribute('aria-disabled', 'true');
-        }
-        button.textContent = alreadyAdded
-          ? `${group.name} (assigned)`
-          : `${group.name} group`;
-        if (!alreadyAdded) {
-          button.onclick = async () => {
-            selectedGroupNames.push(group.name);
-            selectedGroupNames.sort((left, right) => left.localeCompare(right));
-            await saveAdminUserResources(user.id, selectedIds, selectedGroupNames);
-            user.groupNames = [...selectedGroupNames];
-            user.groupName = selectedGroupNames[0] || null;
-            renderGroupPills();
-            // Re-render the quick add groups to update button states
-            const buttons = quickAddGroupsContainer.querySelectorAll('button');
-            for (let i = 0; i < buttons.length; i++) {
-              const groupEntry = adminGroups[i];
-              const allAdded = selectedGroupNames.includes(groupEntry.name);
-              buttons[i].disabled = allAdded;
-              buttons[i].setAttribute('aria-disabled', String(allAdded));
-              buttons[i].classList.toggle('assigned', allAdded);
-              buttons[i].textContent = allAdded
-                ? `${groupEntry.name} (assigned)`
-                : `${groupEntry.name} group`;
-            }
-          };
-        }
-        quickAddGroupsContainer.appendChild(button);
-      }
 
       editorRow.append(input, addButton);
 
       const helper = document.createElement('div');
       helper.className = 'admin-helper';
-      helper.textContent = 'Remove individual calendars with x, or assign whole groups to grant access dynamically.';
+      helper.textContent = 'Remove approvals with x, or add either a group or calendar from the single Add box.';
 
-      head.append(titleWrap, roleBadge);
+      const userMetaControls = document.createElement('div');
+      userMetaControls.style.display = 'grid';
+      userMetaControls.style.justifyItems = 'end';
+      userMetaControls.style.gap = '8px';
+      userMetaControls.append(roleBadge, accountModeWrap);
+
+      head.append(titleWrap, userMetaControls);
       renderCalendarPills();
       renderGroupPills();
 
-      card.append(head, calendarSectionTitle, calendarPills, groupSectionTitle, groupPills, groupEditorRow, groupDatalist, quickAddGroupsTitle, quickAddGroupsContainer, allResourcesTitle, allResourcesCatalog, datalist, editorRow, helper);
+      card.append(head, calendarSectionTitle, calendarPills, groupSectionTitle, groupPills, datalist, editorRow, helper);
       adminUserGrid.appendChild(card);
     }
 
@@ -4692,6 +6145,20 @@ def index() -> None:
         const extra = document.createElement('div');
         extra.className = 'admin-link-token';
         extra.textContent = `Requested at: ${accessRequest.requestedAt || 'unknown'}`;
+        const reviewLog = document.createElement('div');
+        reviewLog.className = 'admin-helper';
+        if (accessRequest.status === 'approved') {
+          if (accessRequest.approvalSource === 'auto_link_addition') {
+            reviewLog.textContent = 'Approval log: auto approved via link addition.';
+          } else if (accessRequest.approvalSource === 'manual') {
+            const reviewerLabel = accessRequest.reviewedByName || accessRequest.reviewedByEmail || accessRequest.reviewedByUserId || 'Unknown approver';
+            reviewLog.textContent = `Approval log: manually approved by ${reviewerLabel}.`;
+          } else {
+            reviewLog.textContent = 'Approval log: approved.';
+          }
+        } else {
+          reviewLog.textContent = 'Approval log: pending review.';
+        }
         const status = document.createElement('div');
         const accessStatus = accessRequest.status === 'approved'
           ? 'approved'
@@ -4700,11 +6167,16 @@ def index() -> None:
             : 'requested';
         status.className = `admin-status-pill admin-status-pill--${accessStatus}`;
         status.textContent = accessStatus === 'approved' ? 'Approved' : accessStatus === 'hidden' ? 'Hidden' : 'Requested';
-        titleWrap.append(title, meta, extra, status);
+        titleWrap.append(title, meta, extra, reviewLog, status);
 
         const approveButton = document.createElement('button');
         approveButton.type = 'button';
         approveButton.className = 'btn btn-primary';
+        const declineButton = document.createElement('button');
+        declineButton.type = 'button';
+        declineButton.className = 'btn btn-danger';
+        declineButton.textContent = 'Decline';
+        declineButton.style.display = 'none';
         if (accessRequest.status === 'hidden') {
           approveButton.textContent = 'Hidden';
           approveButton.disabled = true;
@@ -4713,6 +6185,7 @@ def index() -> None:
           approveButton.disabled = true;
         } else {
           approveButton.textContent = 'Approve';
+          declineButton.style.display = 'inline-flex';
           approveButton.onclick = async () => {
             try {
               await request(`/api/admin/access-requests/${encodeURIComponent(accessRequest.id)}/approve`, 'POST');
@@ -4722,9 +6195,21 @@ def index() -> None:
               showErrorToast('Approval failed', error instanceof Error ? error.message : String(error));
             }
           };
+          declineButton.onclick = async () => {
+            try {
+              await request(`/api/admin/access-requests/${encodeURIComponent(accessRequest.id)}/decline`, 'POST');
+              showSaveToast('Request declined', `${accessRequest.requesterName || 'User'} request was declined.`);
+              await loadAdminData();
+            } catch (error) {
+              showErrorToast('Decline failed', error instanceof Error ? error.message : String(error));
+            }
+          };
         }
 
-        head.append(titleWrap, approveButton);
+        const actionWrap = document.createElement('div');
+        actionWrap.className = 'btn-group';
+        actionWrap.append(declineButton, approveButton);
+        head.append(titleWrap, actionWrap);
         card.append(head);
 
         const detail = document.createElement('div');
@@ -4776,6 +6261,9 @@ def index() -> None:
     const attemptedToken = options.attemptedToken || '';
     const validatingToken = Boolean(options.validatingToken);
     appShell.style.display = 'none';
+    if (profileOnboardingScreen) {
+      profileOnboardingScreen.style.display = 'none';
+    }
     landingScreen.style.display = 'flex';
     startSlimeSimulation();
 
@@ -4822,6 +6310,26 @@ def index() -> None:
       currentUser = session && session.authenticated ? session.user : null;
       syncUserIdInUrl(currentUser);
       allCalendars = cals;
+
+      const completeTokenSubmit = async () => {
+        if (profileOnboardingScreen) {
+          profileOnboardingScreen.style.display = 'none';
+        }
+        showAppShell();
+        renderSidebar();
+        void loadAccessCatalog();
+        try {
+          ensureCalendarLoaded();
+        } catch (e) {
+          console.error('FullCalendar render error (non-fatal):', e);
+        }
+      };
+
+      if (await maybeRequireProfileOnboarding(completeTokenSubmit)) {
+        tokenSubmit.disabled = false;
+        return;
+      }
+
       // Remove shared-link tokens from the URL after successful validation.
       const url = new URL(window.location.href);
       url.searchParams.delete('token');
@@ -4832,14 +6340,7 @@ def index() -> None:
         url.searchParams.set('user_id', currentUser.id);
       }
       history.replaceState({}, '', url.toString());
-      showAppShell();
-      renderSidebar();
-      void loadAccessCatalog();
-      try {
-        ensureCalendarLoaded();
-      } catch (e) {
-        console.error('FullCalendar render error (non-fatal):', e);
-      }
+      await completeTokenSubmit();
     };
 
     tokenSubmit.onclick = submitToken;
@@ -4849,9 +6350,55 @@ def index() -> None:
 
     // ── Google OAuth Login ────────────────────────────────────────────────────
     const googleLoginBtn = document.getElementById('google-login-btn');
+    const passkeyLoginBtn = document.getElementById('passkey-login-btn');
+    const emailLoginInput = document.getElementById('email-login-input');
+    const emailLoginBtn = document.getElementById('email-login-btn');
+
+    const loadAppForAuthenticatedSession = async (sessionToken, sessionUser, originalToken = null) => {
+      currentToken = sessionToken;
+      currentUser = sessionUser;
+      syncUserIdInUrl(currentUser);
+
+      const cals = await request('/api/calendars?token=' + encodeURIComponent(currentToken), 'GET', null, false);
+      tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
+      hasValidToken = true;
+      allCalendars = cals;
+
+      const completeLogin = async () => {
+        if (profileOnboardingScreen) {
+          profileOnboardingScreen.style.display = 'none';
+        }
+        showAppShell();
+        renderSidebar();
+        void loadAccessCatalog();
+        connectCalendarUpdatesSocket();
+        ensureCalendarLoaded();
+        if (window.__revealPage) window.__revealPage();
+
+        if (originalToken && originalToken !== sessionToken) {
+          claimTokenResourcesForLoggedInUser(originalToken).catch(err => {
+            console.warn('[LOGIN] Failed to claim URL token:', err);
+          });
+        }
+      };
+
+      if (await maybeRequireProfileOnboarding(completeLogin)) {
+        return;
+      }
+
+      await completeLogin();
+    };
+
+    const performPasskeyLogin = async () => {
+      const authResult = await authenticateWithPasskey();
+      if (!authResult?.authenticated || !authResult?.apiToken) {
+        throw new Error('Passkey login failed.');
+      }
+      await loadAppForAuthenticatedSession(authResult.apiToken, authResult.user || null, sharedLinkToken || currentToken);
+    };
     if (googleLoginBtn) {
       googleLoginBtn.onclick = async () => {
-        console.log('[LOGIN] Login button clicked, currentToken:', currentToken);
+        console.log('[LOGIN] Login button clicked');
         
         try {
           // First check if user has a valid persisted session
@@ -4864,46 +6411,33 @@ def index() -> None:
           if (sessionResponse.ok) {
             const sessionData = await sessionResponse.json();
             if (sessionData.authenticated && sessionData.apiToken) {
+              const urlToken = sharedLinkToken || currentToken; // Preserve the original shared link token if present
+              if (sessionData.user && sessionData.user.isTokenOnlyAccount) {
+                console.log('[LOGIN] Token-only session detected, redirecting to OAuth');
+                if (urlToken) {
+                  await preservePendingLinkForOauth(urlToken);
+                }
+                window.location.href = '/auth/google-login';
+                return;
+              }
+
               // User has a valid session - use it to authenticate
-              console.log('[LOGIN] Valid session found, authenticating with persisted token');
+              console.log('[LOGIN] Valid session found, authenticating');
               const sessionToken = sessionData.apiToken;
-              const urlToken = currentToken; // Token from URL parameter (if any)
-              
-              currentToken = sessionToken;
-              currentUser = sessionData.user;
-              syncUserIdInUrl(currentUser);
-              
-              // Clear landing screen and load app
-              showAppShell();
-              
-              // Load calendars and data
+
               try {
-                const cals = await request('/api/calendars?token=' + encodeURIComponent(currentToken), 'GET', null, false);
-                tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
-                hasValidToken = true;
-                allCalendars = cals;
-                updateSidebar();
-                connectCalendarUpdatesSocket();
-                fcCalendar.refetchEvents();
-                if (window.__revealPage) window.__revealPage();
+                await loadAppForAuthenticatedSession(sessionToken, sessionData.user, sharedLinkToken || currentToken);
               } catch (error) {
                 console.error('[LOGIN] Failed to load calendars with persisted session:', error);
                 // Fall through to OAuth as fallback
                 if (urlToken) {
-                  console.log('[LOGIN] Preserving URL token before OAuth redirect');
+                  console.log('[LOGIN] Preserving shared link before OAuth redirect');
                   await preservePendingLinkForOauth(urlToken);
                 }
                 window.location.href = '/auth/google-login';
                 return;
               }
               
-              // If there was a URL token different from session token, claim it for this user
-              if (urlToken && urlToken !== sessionToken) {
-                console.log('[LOGIN] Claiming URL token for authenticated user:', urlToken);
-                claimTokenResourcesForLoggedInUser(urlToken).catch(err => {
-                  console.warn('[LOGIN] Failed to claim URL token:', err);
-                });
-              }
               return;
             }
           }
@@ -4912,17 +6446,69 @@ def index() -> None:
         }
         
         // No valid session - proceed with OAuth flow
-        if (currentToken) {
-          console.log('[LOGIN] Preserving current link token before OAuth redirect');
-          await preservePendingLinkForOauth(currentToken);
+        if (sharedLinkToken || currentToken) {
+          console.log('[LOGIN] Preserving shared link before OAuth redirect');
+          await preservePendingLinkForOauth(sharedLinkToken || currentToken);
         }
         window.location.href = '/auth/google-login';
+      };
+    }
+
+    if (passkeyLoginBtn) {
+      passkeyLoginBtn.onclick = async () => {
+        const oldLabel = passkeyLoginBtn.textContent;
+        passkeyLoginBtn.disabled = true;
+        passkeyLoginBtn.textContent = 'Logging in...';
+        try {
+          await performPasskeyLogin();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          showErrorToast('Passkey login failed', message);
+        } finally {
+          passkeyLoginBtn.disabled = false;
+          passkeyLoginBtn.textContent = oldLabel;
+        }
+      };
+    }
+
+    if (emailLoginBtn) {
+      emailLoginBtn.onclick = async () => {
+        const email = String(emailLoginInput?.value || '').trim();
+        if (!email) {
+          tokenHelp.textContent = 'Enter your email to receive a login link.';
+          return;
+        }
+
+        const oldLabel = emailLoginBtn.textContent;
+        emailLoginBtn.disabled = true;
+        emailLoginBtn.textContent = 'Sending...';
+        try {
+          const response = await fetch('/auth/email-login/request', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(String(payload.detail || 'Unable to send login email.'));
+          }
+          tokenHelp.textContent = String(payload.message || 'If an account exists for that email, a login link has been sent.');
+        } catch (error) {
+          tokenHelp.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
+          emailLoginBtn.disabled = false;
+          emailLoginBtn.textContent = oldLabel;
+        }
       };
     }
   }
 
   function showAppShell() {
     landingScreen.style.display = 'none';
+    if (profileOnboardingScreen) {
+      profileOnboardingScreen.style.display = 'none';
+    }
     appShell.style.display = 'flex';
     adminNavItem.style.display = isAdminUser() ? 'flex' : 'none';
     setCurrentView('calendar');
@@ -4944,10 +6530,36 @@ def index() -> None:
       : allCalendars;
     
     for (const [groupName, calendars] of groupCalendars(visibleCalendars)) {
+      const groupHeaderRow = document.createElement('div');
+      groupHeaderRow.className = 'sidebar-group-header';
+
       const groupHeader = document.createElement('div');
-      groupHeader.className = 'sidebar-section-title';
+      groupHeader.className = 'sidebar-section-title sidebar-section-title--group';
       groupHeader.textContent = groupName;
-      calendarList.appendChild(groupHeader);
+
+      const groupToggleLabel = document.createElement('label');
+      groupToggleLabel.className = 'sidebar-group-toggle';
+      const groupToggle = document.createElement('input');
+      groupToggle.type = 'checkbox';
+      groupToggle.className = 'cal-checkbox';
+      groupToggle.style.setProperty('--cal-color', '#94a3b8');
+      const visibleCount = calendars.filter(cal => !hiddenCals.has(cal.id)).length;
+      groupToggle.checked = calendars.length > 0 && visibleCount === calendars.length;
+      groupToggle.indeterminate = visibleCount > 0 && visibleCount < calendars.length;
+      groupToggle.addEventListener('change', () => {
+        if (groupToggle.checked) {
+          for (const cal of calendars) hiddenCals.delete(cal.id);
+        } else {
+          for (const cal of calendars) hiddenCals.add(cal.id);
+        }
+        fcCalendar.refetchEvents();
+        renderSidebar();
+      });
+      const groupToggleText = document.createElement('span');
+      groupToggleText.textContent = 'Show';
+      groupToggleLabel.append(groupToggle, groupToggleText);
+      groupHeaderRow.append(groupHeader, groupToggleLabel);
+      calendarList.appendChild(groupHeaderRow);
 
       for (const cal of calendars) {
         const item = document.createElement('div');
@@ -4965,6 +6577,7 @@ def index() -> None:
           if (cb.checked) hiddenCals.delete(cal.id);
           else            hiddenCals.add(cal.id);
           fcCalendar.refetchEvents();
+          renderSidebar();
         });
 
         const dot = document.createElement('span');
@@ -5008,15 +6621,35 @@ def index() -> None:
     }
 
     if (accessNavItem) {
-      accessNavItem.style.display = hasValidToken ? 'flex' : 'none';
+      accessNavItem.style.display = (hasValidToken && !isServiceAccountUser()) ? 'flex' : 'none';
       accessNavItem.onclick = async () => {
         setCurrentView('access');
-        await loadAccessCatalog();
+        await Promise.all([loadAccessCatalog(), loadPasskeys()]);
+      };
+    }
+
+    if (signupNavItem) {
+      signupNavItem.style.display = currentUser && isServiceAccountUser() ? 'flex' : 'none';
+      signupNavItem.onclick = () => {
+        window.location.href = '/signup';
+      };
+    }
+
+    if (shareNavItem) {
+      shareNavItem.style.display = currentUser ? 'flex' : 'none';
+      shareNavItem.onclick = async () => {
+        await openShareLinksDialog();
       };
     }
 
     if (sidebarLogo) {
       sidebarLogo.onclick = () => {
+        setCurrentView('calendar');
+      };
+    }
+
+    if (calendarNavItem) {
+      calendarNavItem.onclick = () => {
         setCurrentView('calendar');
       };
     }
@@ -5029,12 +6662,10 @@ def index() -> None:
     }
 
     if (tokenActionNavItem) {
-      const onTokenPage = isTokenOnlyPage();
-      tokenActionNavItem.style.display = onTokenPage ? 'flex' : 'none';
-      if (onTokenPage) {
-        tokenActionLabel.textContent = currentUser && currentUser.isTokenOnlyAccount
-          ? 'Save to account'
-          : 'Add calendar to account';
+      const showSaveAction = currentUser && isServiceAccountUser();
+      tokenActionNavItem.style.display = showSaveAction ? 'flex' : 'none';
+      if (showSaveAction) {
+        tokenActionLabel.textContent = 'Save to account';
       }
       tokenActionNavItem.onclick = async () => {
         await handleTokenPageAction();
@@ -5294,10 +6925,173 @@ def index() -> None:
   if (groupCreateResourceConfirm) {
     groupCreateResourceConfirm.addEventListener('click', () => closeGroupResourceCreateDialog(true));
   }
+  if (createPasskeyButton) {
+    createPasskeyButton.addEventListener('click', async () => {
+      await createPasskeyFromSettings();
+    });
+  }
+  if (regenerateOwnLoginLinkButton) {
+    regenerateOwnLoginLinkButton.addEventListener('click', async () => {
+      const oldLabel = regenerateOwnLoginLinkButton.textContent;
+      regenerateOwnLoginLinkButton.disabled = true;
+      regenerateOwnLoginLinkButton.textContent = 'Regenerating...';
+      try {
+        await regenerateOwnLoginLink();
+      } catch (error) {
+        showErrorToast('Regenerate failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+      } finally {
+        regenerateOwnLoginLinkButton.disabled = false;
+        regenerateOwnLoginLinkButton.textContent = oldLabel;
+      }
+    });
+  }
+  if (shareLinksClose) {
+    shareLinksClose.addEventListener('click', () => {
+      if (shareLinksDialog && shareLinksDialog.open) {
+        shareLinksDialog.close();
+      }
+    });
+  }
+  if (ownLoginLinkCopy) {
+    ownLoginLinkCopy.addEventListener('click', async (event) => {
+      event.preventDefault();
+      if (!ownLoginLinkAnchor) {
+        return;
+      }
+      const url = String(ownLoginLinkAnchor.href || '').trim();
+      if (!url || url.endsWith('/#')) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+        showSaveToast('Copied', 'Login link copied to clipboard.');
+      } catch (error) {
+        showErrorToast('Copy failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
+      }
+    });
+  }
+  if (passkeyNameInput) {
+    passkeyNameInput.addEventListener('keydown', async (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        await createPasskeyFromSettings();
+      }
+    });
+  }
   if (groupCreateResourceDialog) {
     groupCreateResourceDialog.addEventListener('close', () => {
       if (pendingGroupResourceCreateResolve) {
         closeGroupResourceCreateDialog(false);
+      }
+    });
+  }
+  if (profileOnboardingForm) {
+    profileOnboardingForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!profileOnboardingSubmit) {
+        return;
+      }
+      profileOnboardingSubmit.disabled = true;
+      const oldLabel = profileOnboardingSubmit.textContent;
+      profileOnboardingSubmit.textContent = 'Saving...';
+      if (profileOnboardingError) {
+        profileOnboardingError.textContent = '';
+      }
+
+      try {
+        const name = String(profileOnboardingName?.value || '').trim();
+        const contact = String(profileOnboardingContact?.value || '').trim();
+        const labGroup = String(profileOnboardingLabGroup?.value || '').trim();
+        const saved = await saveProfileWithLabGroupConfirm({ name, contact, labGroup });
+        if (profileOnboardingLabGroup) {
+          profileOnboardingLabGroup.value = saved.labGroup;
+        }
+
+        if (profileOnboardingScreen) {
+          profileOnboardingScreen.style.display = 'none';
+        }
+
+        const continueHandler = pendingProfileContinue;
+        pendingProfileContinue = null;
+        if (typeof continueHandler === 'function') {
+          await continueHandler();
+        }
+      } catch (error) {
+        if (profileOnboardingError) {
+          profileOnboardingError.textContent = error instanceof Error ? error.message : String(error);
+        }
+      } finally {
+        profileOnboardingSubmit.disabled = false;
+        profileOnboardingSubmit.textContent = oldLabel;
+      }
+    });
+  }
+  if (settingsProfileSaveButton) {
+    settingsProfileSaveButton.addEventListener('click', async () => {
+      if (settingsProfileError) {
+        settingsProfileError.textContent = '';
+      }
+      const oldLabel = settingsProfileSaveButton.textContent;
+      settingsProfileSaveButton.disabled = true;
+      settingsProfileSaveButton.textContent = 'Saving...';
+      try {
+        const name = String(settingsProfileNameInput?.value || '').trim();
+        const contact = String(settingsProfileContactInput?.value || '').trim();
+        const labGroup = String(settingsProfileLabGroupInput?.value || '').trim();
+        const saved = await saveProfileWithLabGroupConfirm({ name, contact, labGroup });
+        if (settingsProfileLabGroupInput) {
+          settingsProfileLabGroupInput.value = saved.labGroup;
+        }
+        showSaveToast('Profile updated', 'Your profile changes have been saved.', false, accessPanel || document.body);
+      } catch (error) {
+        if (settingsProfileError) {
+          settingsProfileError.textContent = error instanceof Error ? error.message : String(error);
+        }
+      } finally {
+        settingsProfileSaveButton.disabled = false;
+        settingsProfileSaveButton.textContent = oldLabel;
+      }
+    });
+  }
+  if (labGroupConfirmCancel) {
+    labGroupConfirmCancel.addEventListener('click', () => {
+      if (pendingLabGroupResolve) {
+        const resolve = pendingLabGroupResolve;
+        pendingLabGroupResolve = null;
+        resolve('');
+      }
+      if (labGroupConfirmDialog && labGroupConfirmDialog.open) {
+        labGroupConfirmDialog.close();
+      }
+    });
+  }
+  if (labGroupConfirmApply) {
+    labGroupConfirmApply.addEventListener('click', () => {
+      const editedValue = String(labGroupConfirmInput?.value || '').trim();
+      const selectedValue = String(labGroupConfirmSelect?.value || '').trim();
+      const resolvedValue = selectedValue || editedValue;
+      if (!resolvedValue) {
+        if (labGroupConfirmMessage) {
+          labGroupConfirmMessage.textContent = 'Lab group not found, please confirm spelling.';
+        }
+        return;
+      }
+      if (pendingLabGroupResolve) {
+        const resolve = pendingLabGroupResolve;
+        pendingLabGroupResolve = null;
+        resolve(resolvedValue);
+      }
+      if (labGroupConfirmDialog && labGroupConfirmDialog.open) {
+        labGroupConfirmDialog.close();
+      }
+    });
+  }
+  if (labGroupConfirmDialog) {
+    labGroupConfirmDialog.addEventListener('close', () => {
+      if (pendingLabGroupResolve) {
+        const resolve = pendingLabGroupResolve;
+        pendingLabGroupResolve = null;
+        resolve('');
       }
     });
   }
@@ -5416,7 +7210,7 @@ def index() -> None:
       .then(sessionData => {
         if (sessionData && sessionData.authenticated && sessionData.apiToken) {
           // User has a valid session - use the session token
-          console.log('[BOOTSTRAP] Valid session found, using session token');
+          console.log('[BOOTSTRAP] Valid session found');
           currentToken = sessionData.apiToken;
           currentUser = sessionData.user;
           authenticatedSessionToken = sessionData.apiToken;
@@ -5439,7 +7233,7 @@ def index() -> None:
 
   // URL token present — validate silently (keep page hidden) to avoid a
   // flash of the landing screen during the round-trip to the server.
-  console.log('[BOOTSTRAP] URL token present:', currentToken);
+  console.log('[BOOTSTRAP] URL token present');
   getSessionUser()
     .then(sessionData => {
       if (sessionData && sessionData.user && sessionData.apiToken) {
@@ -5478,41 +7272,55 @@ def index() -> None:
       syncUserIdInUrl(currentUser);
       allCalendars = cals;
 
-      if (currentUser && currentUser.id) {
-        const pendingCalendarIdsRaw = localStorage.getItem('pendingCalendarIdsToClaim');
-        let pendingCalendarIds = [];
-        if (pendingCalendarIdsRaw) {
-          try {
-            const parsedCalendarIds = JSON.parse(pendingCalendarIdsRaw);
-            if (Array.isArray(parsedCalendarIds)) {
-              pendingCalendarIds = parsedCalendarIds.filter(calendarId => typeof calendarId === 'string' && calendarId.trim());
+      const completeBootstrapLogin = async () => {
+        if (profileOnboardingScreen) {
+          profileOnboardingScreen.style.display = 'none';
+        }
+        if (currentUser && currentUser.id) {
+          const pendingCalendarIdsRaw = localStorage.getItem('pendingCalendarIdsToClaim');
+          let pendingCalendarIds = [];
+          if (pendingCalendarIdsRaw) {
+            try {
+              const parsedCalendarIds = JSON.parse(pendingCalendarIdsRaw);
+              if (Array.isArray(parsedCalendarIds)) {
+                pendingCalendarIds = parsedCalendarIds.filter(calendarId => typeof calendarId === 'string' && calendarId.trim());
+              }
+            } catch (error) {
+              console.warn('[BOOTSTRAP] Invalid pending calendar claim payload:', error);
             }
-          } catch (error) {
-            console.warn('[BOOTSTRAP] Invalid pending calendar claim payload:', error);
           }
-        }
-        const tokenToClaim = token && !isJwtToken(token) && token !== authenticatedSessionToken ? token : null;
-        if (tokenToClaim || pendingCalendarIds.length > 0) {
-          if (tokenToClaim) {
-            console.log('[BOOTSTRAP] Claiming URL token for authenticated user:', tokenToClaim);
-          }
+          const tokenToClaim = sharedLinkToken && sharedLinkToken !== authenticatedSessionToken
+            ? sharedLinkToken
+            : (token && !isJwtToken(token) && token !== authenticatedSessionToken ? token : null);
+          if (tokenToClaim || pendingCalendarIds.length > 0) {
+            if (tokenToClaim) {
+              console.log('[BOOTSTRAP] Claiming shared link for authenticated user');
+            }
 
-          await claimTokenResourcesForLoggedInUser(tokenToClaim || currentToken, pendingCalendarIds.length > 0 ? pendingCalendarIds : null);
-          if (pendingCalendarIds.length > 0) {
-            localStorage.removeItem('pendingCalendarIdsToClaim');
-          }
-          // Only redirect if we have a URL token to clean up
-          if (token && !isJwtToken(token) && token !== authenticatedSessionToken) {
-            redirectToUserOnlyUrl(currentUser);
+            await claimTokenResourcesForLoggedInUser(tokenToClaim || currentToken, pendingCalendarIds.length > 0 ? pendingCalendarIds : null);
+            if (pendingCalendarIds.length > 0) {
+              localStorage.removeItem('pendingCalendarIdsToClaim');
+            }
+            // Only redirect if we have a URL token to clean up
+            if (token && !isJwtToken(token) && token !== authenticatedSessionToken) {
+              redirectToUserOnlyUrl(currentUser);
+            }
           }
         }
+
+        showAppShell();
+        renderSidebar();
+        void loadAccessCatalog();
+        ensureCalendarLoaded();
+        if (window.__revealPage) window.__revealPage();
+      };
+
+      if (await maybeRequireProfileOnboarding(completeBootstrapLogin)) {
+        if (window.__revealPage) window.__revealPage();
+        return;
       }
-      
-      showAppShell();
-      renderSidebar();
-      void loadAccessCatalog();
-      ensureCalendarLoaded();
-      if (window.__revealPage) window.__revealPage();
+
+      await completeBootstrapLogin();
     } catch (err) {
       console.error('[BOOTSTRAP] Token validation or protected data load failed:', err);
       hasValidToken = false;
@@ -5520,6 +7328,7 @@ def index() -> None:
       syncUserIdInUrl(null);
       tokenAllowedCalendars = null;
       hiddenCals = new Set();
+      sharedLinkToken = null;
       showLandingScreen({ invalidToken: true, attemptedToken: token });
       if (window.__revealPage) window.__revealPage();
     }

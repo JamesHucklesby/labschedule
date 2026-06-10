@@ -152,7 +152,12 @@ def _resolve_user_id_from_api_token(token: str | None) -> str | None:
 def _resolve_user_id_from_login_token(session: Session, token: str | None) -> str | None:
     if not token:
         return None
-    user_id = session.scalar(select(UserORM.id).where(UserORM.login_token == token))
+    normalized = ''.join(ch for ch in str(token) if ch.isalnum()).lower()
+    user_id = session.scalar(
+        select(UserORM.id).where(
+            func.lower(func.regexp_replace(UserORM.login_token, r'[^A-Za-z0-9]', '', 'g')) == normalized
+        )
+    )
     return str(user_id) if user_id else None
 
 
@@ -186,11 +191,6 @@ def _get_user_allowed_calendars(session: Session, user_id: str) -> set[str] | No
         .where(CalendarGroupLinkORM.group_name.in_(approved_group_names))
         .order_by(CalendarGroupLinkORM.calendar_id.asc())
     ).all() if approved_group_names else []
-    fallback_group_calendar_ids = session.scalars(
-        select(CalendarORM.id)
-        .where(CalendarORM.group_name.in_(approved_group_names))
-        .order_by(CalendarORM.id.asc())
-    ).all() if approved_group_names else []
     hidden_calendar_ids = session.scalars(
         select(UserCalendarLinkORM.calendar_id)
         .where(UserCalendarLinkORM.user_id == user_id)
@@ -200,7 +200,6 @@ def _get_user_allowed_calendars(session: Session, user_id: str) -> set[str] | No
     return (
         {str(cal_id) for cal_id in direct_calendar_ids if cal_id}
         | {str(cal_id) for cal_id in group_calendar_ids if cal_id}
-        | {str(cal_id) for cal_id in fallback_group_calendar_ids if cal_id}
     ) - {str(cal_id) for cal_id in hidden_calendar_ids if cal_id}
 
 
@@ -302,11 +301,18 @@ def _session_user_for_token(token: str | None) -> dict[str, Any] | None:
         user = session.get(UserORM, user_id)
         if user is None:
             return None
+        contact = str(user.contact or '').strip()
+        lab_group = str(user.lab_group or '').strip()
+        name = str(user.name or '').strip()
         return {
             'id': user.id,
             'email': user.email,
-            'name': user.name,
+            'name': name,
+            'contact': contact,
+            'labGroup': lab_group,
+            'profileComplete': bool(name and contact and lab_group),
             'role': user.role or DEFAULT_USER_ROLE,
+            'serviceAccount': bool(user.service_account),
             'isTokenOnlyAccount': (
                 str(user.google_id or '').startswith('link:')
                 or str(user.google_id or '').startswith('local:')
@@ -326,11 +332,18 @@ def _session_user_for_login_or_api_token(token: str | None) -> dict[str, Any] | 
         user = session.get(UserORM, user_id)
         if user is None:
             return None
+        contact = str(user.contact or '').strip()
+        lab_group = str(user.lab_group or '').strip()
+        name = str(user.name or '').strip()
         return {
             'id': user.id,
             'email': user.email,
-            'name': user.name,
+            'name': name,
+            'contact': contact,
+            'labGroup': lab_group,
+            'profileComplete': bool(name and contact and lab_group),
             'role': user.role or DEFAULT_USER_ROLE,
+            'serviceAccount': bool(user.service_account),
             'isTokenOnlyAccount': (
                 str(user.google_id or '').startswith('link:')
                 or str(user.google_id or '').startswith('local:')

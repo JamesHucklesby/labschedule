@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session
 
 from config import POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB
-from models import ENGINE, SessionLocal, Base, CalendarORM, EventORM, GroupORM, GroupUserLinkORM, CalendarGroupLinkORM, UserCalendarLinkORM, UserORM
+from models import ENGINE, SessionLocal, Base, CalendarORM, EventORM, GroupORM, GroupUserLinkORM, CalendarGroupLinkORM, LabGroupORM, UserCalendarLinkORM, UserORM, UserSavedShareLinkORM
 from utils import _split_legacy_event_title, _compose_display_title
 
 # ── Globals ───────────────────────────────────────────────────────────────────
@@ -24,6 +24,22 @@ DB_LOCK = RLock()
 _DB_WRITE_LOCK_TIMEOUT_SECONDS = 5.0
 _DB_WRITE_RETRIES = 3
 _DB_WRITE_RETRY_BASE_DELAY_SECONDS = 0.05
+
+_DICEWARE_WORDS: tuple[str, ...] = (
+    'amber', 'anchor', 'apple', 'artist', 'autumn', 'badge', 'bamboo', 'beacon', 'birch', 'bison',
+    'blossom', 'breeze', 'brook', 'cable', 'cactus', 'candle', 'canyon', 'captain', 'carpet', 'castle',
+    'cedar', 'circle', 'citrus', 'clover', 'cobalt', 'comet', 'coral', 'cotton', 'crystal', 'daisy',
+    'delta', 'desert', 'dolphin', 'dragon', 'drift', 'eagle', 'echo', 'ember', 'falcon', 'feather',
+    'fern', 'fjord', 'forest', 'fossil', 'galaxy', 'garden', 'glacier', 'granite', 'harbor', 'hazel',
+    'helium', 'honey', 'horizon', 'island', 'ivory', 'jacket', 'jasmine', 'jungle', 'juniper', 'kernel',
+    'kiwi', 'ladder', 'lagoon', 'lantern', 'lavender', 'legend', 'lemon', 'lilac', 'linen', 'lotus',
+    'mango', 'maple', 'marble', 'meadow', 'meteor', 'midnight', 'mint', 'mosaic', 'mountain', 'nectar',
+    'night', 'oasis', 'ocean', 'olive', 'onyx', 'orchid', 'otter', 'pebble', 'pepper', 'phoenix',
+    'pine', 'pluto', 'prairie', 'quartz', 'rabbit', 'raven', 'reef', 'river', 'rocket', 'rose',
+    'sable', 'saffron', 'sapphire', 'scarlet', 'shadow', 'silk', 'silver', 'sky', 'solstice', 'sparrow',
+    'spice', 'spruce', 'star', 'stone', 'summit', 'sunset', 'tiger', 'timber', 'topaz', 'trail',
+    'tulip', 'twilight', 'valley', 'velvet', 'violet', 'voyage', 'water', 'willow', 'winter', 'zephyr',
+)
 
 T = TypeVar('T')
 
@@ -98,6 +114,15 @@ def _ensure_group_names(session: Session, group_names: list[str]) -> None:
         session.execute(
             text('INSERT INTO groups (name) VALUES (:name) ON CONFLICT (name) DO NOTHING'),
             {'name': group_name},
+        )
+
+
+def _ensure_lab_group_names(session: Session, lab_group_names: list[str]) -> None:
+    unique_names = sorted({name for name in (_normalize_group_name(value) for value in lab_group_names) if name})
+    for lab_group_name in unique_names:
+        session.execute(
+            text('INSERT INTO lab_groups (name) VALUES (:name) ON CONFLICT (name) DO NOTHING'),
+            {'name': lab_group_name},
         )
 
 
@@ -201,6 +226,7 @@ def _replace_user_group_links(
         text('DELETE FROM group_user_links WHERE user_id = :user_id'),
         {'user_id': user_id},
     )
+
     for group_name in deduped:
         session.execute(
             pg_insert(GroupUserLinkORM).values(
@@ -220,6 +246,22 @@ def _replace_user_group_links(
                 },
             )
         )
+
+
+def _record_user_saved_share_link(session: Session, user_id: str, source_user_id: str) -> None:
+    normalized_user_id = str(user_id or '').strip()
+    normalized_source_user_id = str(source_user_id or '').strip()
+    if not normalized_user_id or not normalized_source_user_id or normalized_user_id == normalized_source_user_id:
+        return
+    session.execute(
+        pg_insert(UserSavedShareLinkORM).values(
+            user_id=normalized_user_id,
+            source_user_id=normalized_source_user_id,
+            created_at=datetime.now().astimezone().isoformat(),
+        ).on_conflict_do_nothing(
+            index_elements=[UserSavedShareLinkORM.user_id, UserSavedShareLinkORM.source_user_id],
+        )
+    )
 
 
 def _upsert_user_group_link(
@@ -308,6 +350,61 @@ def _get_user_group_names_from_links(session: Session, user_id: str) -> list[str
     return [name for name in (_normalize_group_name(value) for value in group_names) if name]
 
 
+def _merge_user_access_from_source(
+    session: Session,
+    *,
+    source_user_id: str,
+    target_user_id: str,
+    requested_calendar_ids: list[str] | None = None,
+    approved_by_user_id: str | None = None,
+    approved_at: str | None = None,
+    requested_at: str | None = None,
+) -> dict[str, Any]:
+    source_calendar_ids = sorted(_get_user_calendar_ids(session, source_user_id) or [])
+    source_group_names = sorted(_get_user_group_names_from_links(session, source_user_id) or [])
+
+    if requested_calendar_ids:
+        requested_set = {str(calendar_id).strip() for calendar_id in requested_calendar_ids if str(calendar_id or '').strip()}
+        claimed_calendar_ids = [calendar_id for calendar_id in source_calendar_ids if calendar_id in requested_set]
+    else:
+        claimed_calendar_ids = source_calendar_ids
+
+    current_calendar_ids = sorted(_get_user_calendar_ids(session, target_user_id) or [])
+    merged_calendar_ids = sorted(set(current_calendar_ids).union(claimed_calendar_ids))
+
+    current_group_names = sorted(_get_user_group_names_from_links(session, target_user_id) or [])
+    merged_group_names = sorted(set(current_group_names).union(source_group_names))
+
+    effective_approved_by_user_id = approved_by_user_id or target_user_id
+    effective_approved_at = approved_at or datetime.now().astimezone().isoformat()
+    effective_requested_at = requested_at or effective_approved_at
+
+    _replace_user_calendar_links(
+        session,
+        target_user_id,
+        merged_calendar_ids,
+        approved_by_user_id=effective_approved_by_user_id,
+        approved_at=effective_approved_at,
+        requested_at=effective_requested_at,
+    )
+    _replace_user_group_links(
+        session,
+        target_user_id,
+        merged_group_names,
+        approved_by_user_id=effective_approved_by_user_id,
+        approved_at=effective_approved_at,
+        requested_at=effective_requested_at,
+    )
+
+    return {
+        'sourceCalendarIds': source_calendar_ids,
+        'sourceGroupNames': source_group_names,
+        'claimedCalendarIds': claimed_calendar_ids,
+        'mergedCalendarIds': merged_calendar_ids,
+        'mergedGroupNames': merged_group_names,
+    }
+
+
 # ── Version helpers ───────────────────────────────────────────────────────────
 
 def _epoch_ms_now() -> int:
@@ -324,9 +421,9 @@ def _next_event_version_ms(session: Session, event_uid: str) -> int:
 # ── Token / email generators ──────────────────────────────────────────────────
 
 def _generate_unique_login_token(session: Session) -> str:
-    """Generate a token unique in users.login_token."""
+    """Generate a diceware-style token unique in users.login_token."""
     for _ in range(20):
-        candidate = secrets.token_hex(16)
+        candidate = ''.join(secrets.choice(_DICEWARE_WORDS) for _ in range(4)).lower()
         exists = session.scalar(
             select(UserORM.id).where(UserORM.login_token == candidate).limit(1)
         )
@@ -384,9 +481,12 @@ def init_db() -> None:
 
         for ddl in [
             'CREATE TABLE IF NOT EXISTS groups (name TEXT PRIMARY KEY)',
+            'CREATE TABLE IF NOT EXISTS lab_groups (name TEXT PRIMARY KEY)',
             'CREATE TABLE IF NOT EXISTS group_user_links (group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT \'approved\', requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, approved_by_user_id TEXT, approved_at TEXT, PRIMARY KEY (group_name, user_id))',
             'CREATE TABLE IF NOT EXISTS calendar_group_links (calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE, group_name TEXT NOT NULL REFERENCES groups(name) ON DELETE CASCADE, PRIMARY KEY (calendar_id, group_name))',
             'CREATE TABLE IF NOT EXISTS user_calendar_links (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, calendar_id TEXT NOT NULL REFERENCES calendars(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT \'approved\', requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, approved_by_user_id TEXT, approved_at TEXT, PRIMARY KEY (user_id, calendar_id))',
+            'CREATE TABLE IF NOT EXISTS user_saved_share_links (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, source_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, source_user_id))',
+            "CREATE TABLE IF NOT EXISTS user_passkeys (credential_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL DEFAULT 'Passkey', public_key TEXT NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0, transports TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             'ALTER TABLE events ADD COLUMN IF NOT EXISTS event_uid TEXT',
             'ALTER TABLE events ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1',
             'ALTER TABLE events ADD COLUMN IF NOT EXISTS deleted INTEGER NOT NULL DEFAULT 0',
@@ -408,7 +508,12 @@ def init_db() -> None:
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS image_thumb_url TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'",
+            'ALTER TABLE users ADD COLUMN IF NOT EXISTS service_account BOOLEAN NOT NULL DEFAULT false',
             'ALTER TABLE users ADD COLUMN IF NOT EXISTS login_token TEXT',
+            'ALTER TABLE users ADD COLUMN IF NOT EXISTS email_login_token TEXT',
+            'ALTER TABLE users ADD COLUMN IF NOT EXISTS email_login_expires_at TEXT',
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS contact TEXT NOT NULL DEFAULT ''",
+            'ALTER TABLE users ADD COLUMN IF NOT EXISTS lab_group TEXT',
             "ALTER TABLE group_user_links ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'",
             "ALTER TABLE group_user_links ADD COLUMN IF NOT EXISTS requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
             'ALTER TABLE group_user_links ADD COLUMN IF NOT EXISTS approved_by_user_id TEXT',
@@ -417,6 +522,11 @@ def init_db() -> None:
             "ALTER TABLE user_calendar_links ADD COLUMN IF NOT EXISTS requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
             'ALTER TABLE user_calendar_links ADD COLUMN IF NOT EXISTS approved_by_user_id TEXT',
             'ALTER TABLE user_calendar_links ADD COLUMN IF NOT EXISTS approved_at TEXT',
+            'ALTER TABLE user_passkeys ADD COLUMN IF NOT EXISTS public_key TEXT NOT NULL DEFAULT \'\'',
+            "ALTER TABLE user_passkeys ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Passkey'",
+            'ALTER TABLE user_passkeys ADD COLUMN IF NOT EXISTS sign_count INTEGER NOT NULL DEFAULT 0',
+            'ALTER TABLE user_passkeys ADD COLUMN IF NOT EXISTS transports TEXT',
+            "ALTER TABLE user_passkeys ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
         ]:
             conn.execute(text(ddl))
         conn.commit()
@@ -454,6 +564,12 @@ def init_db() -> None:
         conn.commit()
 
         conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_token ON users(login_token)'))
+        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_login_token ON users(email_login_token)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_passkeys_user_id ON user_passkeys(user_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_users_lab_group ON users(lab_group)'))
+        conn.execute(text('ALTER TABLE users ALTER COLUMN lab_group DROP DEFAULT'))
+        conn.execute(text('ALTER TABLE users ALTER COLUMN lab_group DROP NOT NULL'))
+        conn.execute(text("UPDATE users SET lab_group = NULL WHERE lab_group IS NOT NULL AND trim(lab_group) = ''"))
         conn.execute(text("""
             UPDATE users
             SET role = CASE
@@ -480,6 +596,18 @@ def init_db() -> None:
         group_names.add('General')
 
         _ensure_group_names(session, list(group_names))
+        lab_group_names = [
+            str(name).strip()
+            for name in session.scalars(
+                select(UserORM.lab_group)
+                .where(UserORM.lab_group.isnot(None))
+                .where(func.trim(UserORM.lab_group) != '')
+                .distinct()
+                .order_by(UserORM.lab_group.asc())
+            ).all()
+            if str(name or '').strip()
+        ]
+        _ensure_lab_group_names(session, lab_group_names)
 
         legacy_calendar_group_pairs = session.scalars(select(CalendarORM)).all()
         for calendar in legacy_calendar_group_pairs:
@@ -566,6 +694,8 @@ def init_db() -> None:
         session.execute(text("UPDATE events SET user_name = '' WHERE user_name IS NULL"))
         session.execute(text("UPDATE events SET event_title = '' WHERE event_title IS NULL"))
         session.execute(text("UPDATE events SET contact = '' WHERE contact IS NULL"))
+        session.execute(text("UPDATE users SET contact = '' WHERE contact IS NULL"))
+        session.execute(text("UPDATE users SET lab_group = NULL WHERE lab_group IS NOT NULL AND trim(lab_group) = ''"))
 
         events_needing_split = session.scalars(
             select(EventORM).where(
@@ -581,6 +711,24 @@ def init_db() -> None:
             UPDATE events
             SET modified_at = COALESCE(modified_at, start, CURRENT_TIMESTAMP::text)
             WHERE modified_at IS NULL OR trim(modified_at) = ''
+        """))
+
+        # Normalize legacy modified_by_user_id values before adding FK.
+        session.execute(text("""
+            UPDATE events
+            SET modified_by_user_id = NULL
+            WHERE modified_by_user_id IS NOT NULL
+              AND trim(modified_by_user_id) = ''
+        """))
+        session.execute(text("""
+            UPDATE events e
+            SET modified_by_user_id = NULL
+            WHERE modified_by_user_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM users u
+                WHERE u.id = e.modified_by_user_id
+              )
         """))
 
         _ensure_group_names(session, ['General'])
@@ -616,3 +764,45 @@ def init_db() -> None:
         session.execute(text('ALTER TABLE users DROP COLUMN IF EXISTS group_name'))
         session.execute(text('ALTER TABLE users DROP COLUMN IF EXISTS group_ids'))
         session.execute(text('ALTER TABLE users DROP COLUMN IF EXISTS calendar_ids'))
+        session.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE table_name = 'users'
+                      AND constraint_name = 'users_lab_group_fkey'
+                ) THEN
+                    ALTER TABLE users DROP CONSTRAINT users_lab_group_fkey;
+                END IF;
+            END$$
+        """))
+        session.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE table_name = 'users'
+                      AND constraint_name = 'users_lab_group_fkey'
+                ) THEN
+                    ALTER TABLE users
+                        ADD CONSTRAINT users_lab_group_fkey
+                        FOREIGN KEY (lab_group) REFERENCES lab_groups(name)
+                        ON DELETE SET NULL;
+                END IF;
+            END$$
+        """))
+        session.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE table_name = 'events'
+                      AND constraint_name = 'events_modified_by_user_id_fkey'
+                ) THEN
+                    ALTER TABLE events
+                        ADD CONSTRAINT events_modified_by_user_id_fkey
+                        FOREIGN KEY (modified_by_user_id) REFERENCES users(id)
+                        ON DELETE SET NULL;
+                END IF;
+            END$$
+        """))

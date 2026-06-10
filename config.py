@@ -42,6 +42,16 @@ POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', '')
 POSTGRES_SSLMODE = os.getenv('POSTGRES_SSLMODE', 'prefer').strip()
 POSTGRES_CONNECT_TIMEOUT_SECONDS = int(os.getenv('POSTGRES_CONNECT_TIMEOUT_SECONDS', '5'))
 
+# ── Email login / SMTP ───────────────────────────────────────────────────────
+SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com').strip()
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USERNAME = os.getenv('SMTP_USERNAME', '').strip()
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '').strip()
+SMTP_USE_STARTTLS = os.getenv('SMTP_USE_STARTTLS', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', SMTP_USERNAME).strip()
+SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'Lab Scheduler').strip()
+EMAIL_LOGIN_TOKEN_TTL_MINUTES = int(os.getenv('EMAIL_LOGIN_TOKEN_TTL_MINUTES', '15'))
+
 # ── JWT ───────────────────────────────────────────────────────────────────────
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 JWT_EXP_SECONDS = int(os.getenv('JWT_EXP_SECONDS', '43200'))
@@ -60,7 +70,7 @@ MAX_NOTES_INPUT_LENGTH = 8000
 _CONTROL_CHAR_PATTERN = re.compile(r'[\x00-\x1f\x7f]')
 _UNSAFE_NOTES_CONTROL_CHAR_PATTERN = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 _ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-_TOKEN_PATTERN = re.compile(r'^[A-Za-z0-9._-]{16,1024}$')
+_TOKEN_PATTERN = re.compile(r'^[A-Za-z0-9]{16,1024}$')
 _EMAIL_PATTERN = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
 # ── OAuth state ───────────────────────────────────────────────────────────────

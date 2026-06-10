@@ -1,0 +1,9 @@
+# Exclude local PostgreSQL data and host-managed files from Docker build context
+postgresql/
+backups/
+__pycache__/
+.venv/
+.venv-wsl/
+.vscode/
+backups/
+.env

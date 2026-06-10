@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, create_engine, text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -22,6 +22,12 @@ class Base(DeclarativeBase):
 
 class GroupORM(Base):
     __tablename__ = 'groups'
+
+    name: Mapped[str] = mapped_column(String, primary_key=True)
+
+
+class LabGroupORM(Base):
+    __tablename__ = 'lab_groups'
 
     name: Mapped[str] = mapped_column(String, primary_key=True)
 
@@ -55,6 +61,26 @@ class UserCalendarLinkORM(Base):
     approved_at: Mapped[str | None] = mapped_column(Text)
 
 
+class UserSavedShareLinkORM(Base):
+    __tablename__ = 'user_saved_share_links'
+
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    source_user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    created_at: Mapped[str | None] = mapped_column(Text, server_default=text('CURRENT_TIMESTAMP::text'))
+
+
+class UserPasskeyORM(Base):
+    __tablename__ = 'user_passkeys'
+
+    credential_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'Passkey'"))
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('0'))
+    transports: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default=text('CURRENT_TIMESTAMP::text'))
+
+
 class CalendarORM(Base):
     __tablename__ = 'calendars'
 
@@ -85,7 +111,7 @@ class EventORM(Base):
     calendar_ids: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'[]'"))
     notes: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     committed: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('0'))
-    modified_by_user_id: Mapped[str | None] = mapped_column(Text)
+    modified_by_user_id: Mapped[str | None] = mapped_column(ForeignKey('users.id'))
     modified_at: Mapped[str | None] = mapped_column(Text)
     user_name: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     event_title: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
@@ -100,10 +126,15 @@ class UserORM(Base):
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'user'"))
+    service_account: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('false'))
     login_token: Mapped[str | None] = mapped_column(Text, unique=True)
+    email_login_token: Mapped[str | None] = mapped_column(Text, unique=True)
+    email_login_expires_at: Mapped[str | None] = mapped_column(Text)
     picture_url: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str | None] = mapped_column(Text, server_default=text('CURRENT_TIMESTAMP::text'))
     last_login: Mapped[str | None] = mapped_column(Text, server_default=text('CURRENT_TIMESTAMP::text'))
+    contact: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    lab_group: Mapped[str | None] = mapped_column(ForeignKey('lab_groups.name'), nullable=True)
 
 
 def _build_database_url() -> Any:

@@ -16,6 +16,14 @@ WS_CLIENT_INFO: dict[WebSocket, dict[str, Any]] = {}
 router = APIRouter()
 
 
+def _refresh_client_access_from_token(token: str | None) -> tuple[set[str] | None, str | None]:
+    if not token:
+        return set(), None
+    allowed_calendars = _get_login_or_api_token_allowed_calendars(token)
+    user_id = _get_login_or_api_token_owner_user_id(token)
+    return allowed_calendars, user_id
+
+
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 
 @router.websocket('/ws/calendar-updates')
@@ -29,8 +37,7 @@ async def ws_calendar_updates(websocket: WebSocket) -> None:
     if not token:
         token = websocket.cookies.get('session_token') if websocket.cookies else None
 
-    allowed_calendars = _get_login_or_api_token_allowed_calendars(token) if token else set()
-    user_id = _get_login_or_api_token_owner_user_id(token) if token else None
+    allowed_calendars, user_id = _refresh_client_access_from_token(token)
 
     with WS_CLIENTS_LOCK:
         WS_CLIENT_INFO[websocket] = {
@@ -66,6 +73,9 @@ async def _broadcast_calendar_change(
         clients_info = list(WS_CLIENT_INFO.items())
     if not clients_info:
         return
+    if not calendar_ids:
+        # Fail closed: never broadcast unscoped calendar-change updates.
+        return
 
     message = {
         'type': 'calendar_changed',
@@ -78,14 +88,19 @@ async def _broadcast_calendar_change(
     }
     stale: list[WebSocket] = []
     for websocket, info in clients_info:
-        if info.get('token') is None:
+        token = info.get('token')
+        if token is None:
             continue
-        allowed_calendars = info.get('allowed_calendars')
-        if calendar_ids:
-            if not isinstance(allowed_calendars, set):
-                continue
-            if not any(cal_id in allowed_calendars for cal_id in calendar_ids):
-                continue
+        refreshed_allowed_calendars, refreshed_user_id = _refresh_client_access_from_token(token)
+        with WS_CLIENTS_LOCK:
+            current_info = WS_CLIENT_INFO.get(websocket)
+            if current_info is not None:
+                current_info['allowed_calendars'] = refreshed_allowed_calendars
+                current_info['user_id'] = refreshed_user_id
+        if not isinstance(refreshed_allowed_calendars, set):
+            continue
+        if not any(cal_id in refreshed_allowed_calendars for cal_id in calendar_ids):
+            continue
         try:
             await websocket.send_json(message)
         except Exception:
@@ -134,15 +149,15 @@ async def _broadcast_user_resources_updated(user_id: str) -> None:
     }
     stale: list[WebSocket] = []
     for websocket, info in clients_info:
-        if info.get('user_id') != user_id:
-            continue
         token = info.get('token')
-        if token:
-            refreshed_allowed_calendars = _get_login_or_api_token_allowed_calendars(token)
-            with WS_CLIENTS_LOCK:
-                current_info = WS_CLIENT_INFO.get(websocket)
-                if current_info is not None:
-                    current_info['allowed_calendars'] = refreshed_allowed_calendars
+        refreshed_allowed_calendars, refreshed_user_id = _refresh_client_access_from_token(token)
+        with WS_CLIENTS_LOCK:
+            current_info = WS_CLIENT_INFO.get(websocket)
+            if current_info is not None:
+                current_info['allowed_calendars'] = refreshed_allowed_calendars
+                current_info['user_id'] = refreshed_user_id
+        if refreshed_user_id != user_id:
+            continue
         try:
             await websocket.send_json(message)
         except Exception:

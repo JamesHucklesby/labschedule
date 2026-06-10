@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     container_name: labschedule_db
     user: root
@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-calendar}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     volumes:
-      - postgres_data_2:/var/lib/postgresql/data
+      - /zs/labschedule/postgresql:/var/lib/postgresql
     ports:
       - "54311:5432"
     healthcheck:
@@ -34,13 +34,18 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-calendar}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-calendar}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/auth/callback}
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-1}
+      BACKUP_POSTGRES_HOST: db
+      BACKUP_POSTGRES_PORT: 5432
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - /zs/labschedule/backups:/app/backups
     ports:
-      - "8088:8080"
+      - "8088:777"
     networks:
       - web
 
 networks:
   web:
     external: true
-volumes:
-  postgres_data_2:

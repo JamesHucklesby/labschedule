@@ -2,7 +2,10 @@ import json
 import mimetypes
 import secrets
 import base64
+import colorsys
+import smtplib
 from datetime import datetime
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -13,10 +16,22 @@ from sqlalchemy import func, select
 from auth import (
     _get_user_allowed_calendars,
     _require_admin_user,
+    _require_authenticated_user,
     _resolve_user_id_from_login_or_api_token,
     _session_user_for_login_or_api_token,
 )
-from config import APP_BASE_URL, DEFAULT_USER_ROLE
+from config import (
+    ADMIN_USER_EMAILS,
+    APP_BASE_URL,
+    DEFAULT_USER_ROLE,
+    SMTP_FROM_EMAIL,
+    SMTP_FROM_NAME,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_USERNAME,
+    SMTP_USE_STARTTLS,
+)
 from database import (
     DB_LOCK,
     _db_session,
@@ -25,13 +40,15 @@ from database import (
     _generate_unique_login_token,
     _get_user_calendar_ids,
     _get_user_group_names_from_links,
+    _merge_user_access_from_source,
+    _record_user_saved_share_link,
     _replace_user_calendar_links,
     _replace_user_group_links,
     _replace_calendar_group_links,
     _upsert_user_calendar_link,
     _upsert_user_group_link,
 )
-from models import CalendarORM, GroupORM, GroupUserLinkORM, UserCalendarLinkORM, UserORM
+from models import CalendarGroupLinkORM, CalendarORM, GroupORM, GroupUserLinkORM, UserCalendarLinkORM, UserORM
 from realtime import _publish_user_resources_updated
 from realtime import _publish_calendar_change
 from schemas import (
@@ -50,6 +67,44 @@ from media_assets import (
 )
 
 router = APIRouter()
+
+
+def _send_group_access_request_admin_notification(
+    *,
+    recipients: list[str],
+    requester_name: str,
+    requester_email: str,
+    group_name: str,
+    requested_at: str,
+) -> None:
+    normalized_recipients = sorted({str(value or '').strip().lower() for value in recipients if str(value or '').strip()})
+    if not normalized_recipients:
+        return
+    if not SMTP_FROM_EMAIL or not SMTP_USERNAME or not SMTP_PASSWORD:
+        print('[access-request-email] SMTP not fully configured; skipping admin notification.', flush=True)
+        return
+
+    requester_label = requester_name.strip() or requester_email.strip() or 'Unknown user'
+    message = EmailMessage()
+    message['Subject'] = f'Group access request: {group_name}'
+    message['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>' if SMTP_FROM_NAME else SMTP_FROM_EMAIL
+    message['To'] = ', '.join(normalized_recipients)
+    message.set_content(
+        f'A new group access request was submitted.\n\n'
+        f'Requester: {requester_label}\n'
+        f'Requester email: {requester_email or "(none)"}\n'
+        f'Group: {group_name}\n'
+        f'Requested at: {requested_at}\n\n'
+        f'Review requests in Admin: {APP_BASE_URL}/?admin=1\n'
+    )
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+        smtp.ehlo()
+        if SMTP_USE_STARTTLS:
+            smtp.starttls()
+            smtp.ehlo()
+        smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        smtp.send_message(message)
 def _calendar_image_extension(upload: UploadFile) -> str:
     filename_suffix = Path(upload.filename or '').suffix.lower()
     if filename_suffix in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}:
@@ -63,15 +118,16 @@ def _calendar_image_extension(upload: UploadFile) -> str:
 
 
 def _group_names_for_calendar_ids(session, calendar_ids: list[str]) -> list[str]:
-    group_names = session.scalars(
-        select(CalendarORM.group_name)
-        .where(CalendarORM.id.in_(calendar_ids))
-        .where(CalendarORM.group_name.isnot(None))
-        .where(func.trim(CalendarORM.group_name) != '')
+    if not calendar_ids:
+        return []
+    linked_group_names = session.scalars(
+        select(CalendarGroupLinkORM.group_name)
+        .where(CalendarGroupLinkORM.calendar_id.in_(calendar_ids))
         .distinct()
-        .order_by(CalendarORM.group_name.asc())
+        .order_by(CalendarGroupLinkORM.group_name.asc())
     ).all()
-    return [group_name for group_name in group_names if group_name]
+    names = sorted({str(value).strip() for value in linked_group_names if str(value or '').strip()})
+    return names
 
 
 def _approved_user_ids_for_group(session, group_name: str) -> list[str]:
@@ -101,6 +157,53 @@ def _user_calendar_link(session, user_id: str, calendar_id: str) -> UserCalendar
 
 def _user_group_link(session, user_id: str, group_name: str):
     return session.get(GroupUserLinkORM, (group_name, user_id))
+
+
+def _parse_hex_color(value: str | None) -> tuple[int, int, int] | None:
+    raw = str(value or '').strip()
+    if not raw.startswith('#'):
+        return None
+    hex_value = raw[1:]
+    if len(hex_value) == 3:
+        hex_value = ''.join(ch * 2 for ch in hex_value)
+    if len(hex_value) != 6:
+        return None
+    try:
+        return (
+            int(hex_value[0:2], 16),
+            int(hex_value[2:4], 16),
+            int(hex_value[4:6], 16),
+        )
+    except ValueError:
+        return None
+
+
+def _rgb_to_hex(color: tuple[int, int, int]) -> str:
+    return f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
+
+
+def _rgb_distance_sq(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
+    return (
+        (left[0] - right[0]) ** 2
+        + (left[1] - right[1]) ** 2
+        + (left[2] - right[2]) ** 2
+    )
+
+
+def _pleasant_candidate_colors() -> list[tuple[int, int, int]]:
+    candidates: list[tuple[int, int, int]] = []
+    # Golden-angle hue sweep keeps colors distributed around the wheel.
+    for index in range(36):
+        hue = (index * 0.61803398875) % 1.0
+        lightness = 0.52 if index % 2 == 0 else 0.58
+        saturation = 0.68 if index % 3 else 0.74
+        red_f, green_f, blue_f = colorsys.hls_to_rgb(hue, lightness, saturation)
+        candidates.append((
+            int(round(red_f * 255)),
+            int(round(green_f * 255)),
+            int(round(blue_f * 255)),
+        ))
+    return candidates
 
 
 def _link_state_to_request_state(status: str | None) -> str:
@@ -189,12 +292,37 @@ def _access_request_target_calendar_ids(session, target_type: str, target_id: st
     if group is None:
         raise HTTPException(status_code=404, detail='Requested group not found.')
 
-    calendar_ids = session.scalars(
-        select(CalendarORM.id)
-        .where(CalendarORM.group_name == target_id)
-        .order_by(CalendarORM.name.asc())
+    linked_calendar_ids = session.scalars(
+        select(CalendarGroupLinkORM.calendar_id)
+        .where(CalendarGroupLinkORM.group_name == target_id)
+        .order_by(CalendarGroupLinkORM.calendar_id.asc())
     ).all()
-    return [str(calendar_id) for calendar_id in calendar_ids if calendar_id]
+    return sorted({str(calendar_id) for calendar_id in linked_calendar_ids if calendar_id})
+
+
+def _user_has_group_calendar_access(session, user_id: str, calendar_id: str) -> bool:
+    approved_group_names = [
+        str(group_name).strip()
+        for group_name in session.scalars(
+            select(GroupUserLinkORM.group_name)
+            .where(GroupUserLinkORM.user_id == user_id)
+            .where(GroupUserLinkORM.status == 'approved')
+            .order_by(GroupUserLinkORM.group_name.asc())
+        ).all()
+        if str(group_name or '').strip()
+    ]
+    if not approved_group_names:
+        return False
+
+    linked_calendar_id = session.scalar(
+        select(CalendarGroupLinkORM.calendar_id)
+        .where(CalendarGroupLinkORM.calendar_id == calendar_id)
+        .where(CalendarGroupLinkORM.group_name.in_(approved_group_names))
+        .limit(1)
+    )
+    if linked_calendar_id is not None:
+        return True
+    return False
 
 
 def _serialize_access_link_request(
@@ -209,6 +337,7 @@ def _serialize_access_link_request(
     reviewed_by_user_id: str | None = None,
 ) -> dict[str, Any]:
     requester = session.get(UserORM, requester_user_id)
+    reviewer = session.get(UserORM, reviewed_by_user_id) if reviewed_by_user_id else None
     target_type = _normalize_access_request_target_type(target_type)
     target_id = _normalize_access_request_target_id(target_type, target_id)
     target_calendar_ids = _access_request_target_calendar_ids(session, target_type, target_id)
@@ -219,6 +348,18 @@ def _serialize_access_link_request(
     else:
         target_label = target_id
         group_name = target_id
+
+    approval_source = ''
+    if str(status or '').strip().lower() == 'approved':
+        # Auto-approval flows stamp requested_at and approved_at at the same time
+        # (link creation, add-to-account claims, OAuth conversion merges).
+        if reviewed_at and requested_at and reviewed_at == requested_at:
+            approval_source = 'auto_link_addition'
+        elif reviewer and str(reviewer.role or '').strip().lower() == 'admin':
+            approval_source = 'manual'
+        else:
+            approval_source = 'auto_link_addition'
+
     return {
         'id': _build_access_link_request_id(requester_user_id, target_type, target_id),
         'targetType': target_type,
@@ -232,6 +373,9 @@ def _serialize_access_link_request(
         'requestedAt': requested_at,
         'reviewedAt': reviewed_at,
         'reviewedByUserId': reviewed_by_user_id,
+        'reviewedByName': reviewer.name if reviewer else '',
+        'reviewedByEmail': reviewer.email if reviewer else '',
+        'approvalSource': approval_source,
         'status': status,
     }
 
@@ -278,7 +422,7 @@ def _list_access_requests(session, statuses: set[str] | None = None) -> list[dic
         )
 
     requests.sort(key=lambda request: request.get('requestedAt') or '', reverse=True)
-    requests.sort(key=lambda request: {'requested': 0, 'hidden': 1, 'approved': 2}.get(str(request.get('status') or ''), 3))
+    requests.sort(key=lambda request: 0 if str(request.get('status') or '').strip().lower() != 'approved' else 1)
     return requests
 
 
@@ -287,12 +431,27 @@ def _list_admin_groups(session) -> list[dict[str, Any]]:
     calendars = session.scalars(
         select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
     ).all()
+    calendar_group_links = session.scalars(
+        select(CalendarGroupLinkORM).order_by(CalendarGroupLinkORM.group_name.asc(), CalendarGroupLinkORM.calendar_id.asc())
+    ).all()
+    calendar_by_id = {calendar.id: calendar for calendar in calendars}
     calendars_by_group: dict[str, list[dict[str, Any]]] = {}
-    for calendar in calendars:
-        calendars_by_group.setdefault(calendar.group_name or 'General', []).append({
+    seen_per_group: dict[str, set[str]] = {}
+    for link in calendar_group_links:
+        calendar = calendar_by_id.get(link.calendar_id)
+        if calendar is None:
+            continue
+        group_name = str(link.group_name or '').strip()
+        if not group_name:
+            continue
+        group_seen = seen_per_group.setdefault(group_name, set())
+        if calendar.id in group_seen:
+            continue
+        group_seen.add(calendar.id)
+        calendars_by_group.setdefault(group_name, []).append({
             'id': calendar.id,
             'name': calendar.name,
-            'group': calendar.group_name or 'General',
+            'group': group_name,
             'color': calendar.color,
         })
 
@@ -322,6 +481,9 @@ def access_catalog_for_user(token: str | None = None) -> dict[str, Any]:
         calendars = session.scalars(
             select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
         ).all()
+        calendar_group_links = session.scalars(
+            select(CalendarGroupLinkORM).order_by(CalendarGroupLinkORM.group_name.asc(), CalendarGroupLinkORM.calendar_id.asc())
+        ).all()
         calendar_links = {
             link.calendar_id: link
             for link in session.scalars(
@@ -338,40 +500,58 @@ def access_catalog_for_user(token: str | None = None) -> dict[str, Any]:
         }
 
     grouped_calendars: dict[str, list[dict[str, Any]]] = {}
+    grouped_calendar_seen: dict[str, set[str]] = {}
     group_names: list[str] = []
     seen_group_names: set[str] = set()
     for group in group_rows:
         if group.name not in seen_group_names:
             seen_group_names.add(group.name)
             group_names.append(group.name)
+
+    group_names_by_calendar_id: dict[str, set[str]] = {}
+    for link in calendar_group_links:
+        group_name = str(link.group_name or '').strip()
+        calendar_id = str(link.calendar_id or '').strip()
+        if not group_name or not calendar_id:
+            continue
+        group_names_by_calendar_id.setdefault(calendar_id, set()).add(group_name)
+
     for calendar in calendars:
-        group_name = calendar.group_name or 'General'
-        if group_name not in seen_group_names:
-            seen_group_names.add(group_name)
-            group_names.append(group_name)
-        group_bucket = grouped_calendars.setdefault(group_name, [])
-        calendar_link = calendar_links.get(calendar.id)
-        group_link = group_links.get(group_name)
-        calendar_request_status = _link_state_to_request_state(calendar_link.status if calendar_link else None)
-        group_request_status = _link_state_to_request_state(group_link.status if group_link else None)
-        has_access = calendar.id in accessible_calendar_ids
-        calendar_request_id = _build_access_link_request_id(session_user['id'], 'calendar', calendar.id) if calendar_request_status in {'requested', 'approved', 'hidden'} else None
-        group_request_id = _build_access_link_request_id(session_user['id'], 'group', group_name) if group_request_status in {'requested', 'approved', 'hidden'} else None
-        request_id = calendar_request_id or group_request_id
-        request_target_type = 'calendar' if calendar_request_id else 'group' if group_request_id else None
-        request_state = calendar_request_status if calendar_request_status != 'available' else (
-            group_request_status if group_request_status != 'available' else ('granted' if has_access else 'available')
-        )
-        group_bucket.append({
-            'id': calendar.id,
-            'name': calendar.name,
-            'group': group_name,
-            'color': calendar.color,
-            'hasAccess': has_access,
-            'requestId': request_id,
-            'requestTargetType': request_target_type,
-            'requestState': request_state,
-        })
+        calendar_group_names = set(group_names_by_calendar_id.get(calendar.id, set()))
+        fallback_group_name = str(calendar.group_name or 'General').strip() or 'General'
+        if not calendar_group_names:
+            calendar_group_names.add(fallback_group_name)
+        for group_name in sorted(calendar_group_names):
+            if group_name not in seen_group_names:
+                seen_group_names.add(group_name)
+                group_names.append(group_name)
+            group_bucket = grouped_calendars.setdefault(group_name, [])
+            group_seen = grouped_calendar_seen.setdefault(group_name, set())
+            if calendar.id in group_seen:
+                continue
+            group_seen.add(calendar.id)
+            calendar_link = calendar_links.get(calendar.id)
+            group_link = group_links.get(group_name)
+            calendar_request_status = _link_state_to_request_state(calendar_link.status if calendar_link else None)
+            group_request_status = _link_state_to_request_state(group_link.status if group_link else None)
+            has_access = calendar.id in accessible_calendar_ids
+            calendar_request_id = _build_access_link_request_id(session_user['id'], 'calendar', calendar.id) if calendar_request_status in {'requested', 'approved', 'hidden'} else None
+            group_request_id = _build_access_link_request_id(session_user['id'], 'group', group_name) if group_request_status in {'requested', 'approved', 'hidden'} else None
+            request_id = calendar_request_id or group_request_id
+            request_target_type = 'calendar' if calendar_request_id else 'group' if group_request_id else None
+            request_state = calendar_request_status if calendar_request_status != 'available' else (
+                group_request_status if group_request_status != 'available' else ('granted' if has_access else 'available')
+            )
+            group_bucket.append({
+                'id': calendar.id,
+                'name': calendar.name,
+                'group': group_name,
+                'color': calendar.color,
+                'hasAccess': has_access,
+                'requestId': request_id,
+                'requestTargetType': request_target_type,
+                'requestState': request_state,
+            })
 
     groups: list[dict[str, Any]] = []
     for group_name in group_names:
@@ -401,6 +581,7 @@ def create_access_request(payload: dict[str, Any], token: str | None = None) -> 
 
     target_type = _normalize_access_request_target_type(str(payload.get('targetType') or ''))
     target_id = _normalize_access_request_target_id(target_type, str(payload.get('targetId') or ''))
+    admin_notification_payload: dict[str, Any] | None = None
 
     with DB_LOCK:
         with _db_session() as session:
@@ -486,6 +667,38 @@ def create_access_request(payload: dict[str, Any], token: str | None = None) -> 
                 requested_at=requested_at,
             )
 
+            if target_type == 'group':
+                admin_emails = {
+                    str(value or '').strip().lower()
+                    for value in session.scalars(
+                        select(UserORM.email)
+                        .where(func.lower(UserORM.role) == 'admin')
+                        .where(UserORM.email.isnot(None))
+                        .order_by(UserORM.email.asc())
+                    ).all()
+                    if str(value or '').strip()
+                }
+                admin_emails.update({value.strip().lower() for value in ADMIN_USER_EMAILS if value.strip()})
+                admin_notification_payload = {
+                    'recipients': sorted(admin_emails),
+                    'requesterName': str(user.name or '').strip(),
+                    'requesterEmail': str(user.email or '').strip(),
+                    'groupName': target_id,
+                    'requestedAt': requested_at,
+                }
+
+    if admin_notification_payload:
+        try:
+            _send_group_access_request_admin_notification(
+                recipients=admin_notification_payload.get('recipients') or [],
+                requester_name=str(admin_notification_payload.get('requesterName') or ''),
+                requester_email=str(admin_notification_payload.get('requesterEmail') or ''),
+                group_name=str(admin_notification_payload.get('groupName') or ''),
+                requested_at=str(admin_notification_payload.get('requestedAt') or ''),
+            )
+        except Exception as exc:
+            print(f'[access-request-email] Failed to notify admins: {exc}', flush=True)
+
     return {'ok': True, 'request': serialized}
 
 
@@ -515,15 +728,20 @@ def toggle_access_request_visibility_for_user(request_id: str, token: str | None
 
             now_str = datetime.now().astimezone().isoformat()
             if target_type == 'calendar':
-                _upsert_user_calendar_link(
-                    session,
-                    session_user['id'],
-                    target_id,
-                    status=next_status,
-                    approved_by_user_id=session_user['id'],
-                    approved_at=now_str,
-                    requested_at=link_row.requested_at,
-                )
+                restore_via_group = next_status == 'approved' and _user_has_group_calendar_access(session, session_user['id'], target_id)
+                if restore_via_group:
+                    # Remove the hide override so group-derived access becomes visible again.
+                    session.delete(link_row)
+                else:
+                    _upsert_user_calendar_link(
+                        session,
+                        session_user['id'],
+                        target_id,
+                        status=next_status,
+                        approved_by_user_id=session_user['id'] if next_status == 'approved' else None,
+                        approved_at=now_str if next_status == 'approved' else None,
+                        requested_at=link_row.requested_at,
+                    )
             else:
                 _upsert_user_group_link(
                     session,
@@ -568,10 +786,10 @@ def toggle_access_request_visibility_for_target(payload: dict[str, Any], token: 
             existing_link = _user_calendar_link(session, user.id, target_id) if target_type == 'calendar' else _user_group_link(session, user.id, target_id)
 
             target_calendar_ids = _access_request_target_calendar_ids(session, target_type, target_id)
-            current_calendar_ids = set(_get_user_calendar_ids(session, user.id) or [])
+            current_allowed_calendar_ids = set(_get_user_allowed_calendars(session, user.id) or set())
             current_status = str(existing_link.status or '').strip().lower() if existing_link else ''
 
-            if not current_status and not all(calendar_id in current_calendar_ids for calendar_id in target_calendar_ids):
+            if not current_status and not all(calendar_id in current_allowed_calendar_ids for calendar_id in target_calendar_ids):
                 raise HTTPException(status_code=409, detail='Only granted access can be hidden or restored.')
 
             if not current_status:
@@ -588,15 +806,25 @@ def toggle_access_request_visibility_for_target(payload: dict[str, Any], token: 
 
             now_str = datetime.now().astimezone().isoformat()
             if target_type == 'calendar':
-                _upsert_user_calendar_link(
-                    session,
-                    user.id,
-                    target_id,
-                    status=next_status,
-                    approved_by_user_id=user.id if next_status == 'approved' else None,
-                    approved_at=now_str if next_status == 'approved' else None,
-                    requested_at=requested_at,
+                restore_via_group = (
+                    current_status == 'hidden'
+                    and next_status == 'approved'
+                    and existing_link is not None
+                    and _user_has_group_calendar_access(session, user.id, target_id)
                 )
+                if restore_via_group:
+                    # For group-derived access, restore by removing the hide override only.
+                    session.delete(existing_link)
+                else:
+                    _upsert_user_calendar_link(
+                        session,
+                        user.id,
+                        target_id,
+                        status=next_status,
+                        approved_by_user_id=user.id if next_status == 'approved' else None,
+                        approved_at=now_str if next_status == 'approved' else None,
+                        requested_at=requested_at,
+                    )
             else:
                 _upsert_user_group_link(
                     session,
@@ -703,6 +931,30 @@ def approve_access_request_for_admin(request_id: str, token: str | None = None) 
     return {'ok': True, 'approved': True, 'requestId': request_id, 'userId': target_user.id, 'calendarIds': merged_calendar_ids}
 
 
+@router.post('/api/admin/access-requests/{request_id}/decline')
+def decline_access_request_for_admin(request_id: str, token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    target_user_id, target_type, target_id = _decode_access_link_request_id(request_id)
+
+    with DB_LOCK:
+        with _db_session() as session:
+            target_user = session.get(UserORM, target_user_id)
+            if target_user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+
+            if target_type == 'calendar':
+                link_row = _user_calendar_link(session, target_user.id, target_id)
+            else:
+                link_row = _user_group_link(session, target_user.id, target_id)
+            if link_row is None or str(link_row.status or '').strip().lower() != 'requested':
+                raise HTTPException(status_code=404, detail='Access request not found.')
+
+            session.delete(link_row)
+
+    _publish_user_resources_updated(target_user_id)
+    return {'ok': True, 'declined': True, 'requestId': request_id, 'userId': target_user_id}
+
+
 def _refresh_user_group_names(session, user_ids: list[str] | None = None) -> None:
     # Group membership now lives only in group_user_links; this helper keeps the
     # call sites stable while making the refresh a no-op.
@@ -790,19 +1042,13 @@ def create_link_for_admin(payload: LinkCreateRequest, token: str | None = None) 
     admin_user = _session_user_for_login_or_api_token(token)
     link_name = _sanitize_text_input(payload.name, 'name', min_length=1, max_length=120)
     requested_token = _sanitize_token_input(payload.token, 'token') if payload.token else ''
-    link_token = requested_token or secrets.token_hex(16)
+    link_token = requested_token
     calendar_ids = sorted(_sanitize_calendar_ids_input(payload.calendarIds))
 
     with DB_LOCK:
-            now_str = datetime.now().astimezone().isoformat()
-            _replace_user_calendar_links(
-                session,
-                user.id,
-                calendar_ids,
-                approved_by_user_id=admin_user['id'] if admin_user else None,
-                approved_at=now_str,
-                requested_at=now_str,
-            )
+        with _db_session() as session:
+            if not link_token:
+                link_token = _generate_unique_login_token(session)
             existing = session.scalar(select(UserORM.id).where(UserORM.login_token == link_token))
             if existing is not None:
                 raise HTTPException(status_code=409, detail='Token already exists. Choose a different token.')
@@ -886,6 +1132,7 @@ def list_users_for_admin(token: str | None = None) -> dict[str, Any]:
                 'email': u.email,
                 'name': u.name,
                 'role': u.role or DEFAULT_USER_ROLE,
+                'serviceAccount': bool(u.service_account),
                 'pictureUrl': u.picture_url,
                 'calendarIds': calendar_ids,
                 'groupName': group_names[0] if group_names else None,
@@ -932,6 +1179,93 @@ def create_group_for_admin(payload: GroupCreateRequest, token: str | None = None
     return {'ok': True, 'group': {'name': group_name, 'calendarIds': [], 'calendars': [], 'resourceCount': 0}}
 
 
+@router.post('/api/admin/calendars/suggest-color')
+def suggest_calendar_color_for_group(
+    payload: dict[str, Any],
+    request: Request,
+    token: str | None = None,
+) -> dict[str, Any]:
+    token = _prefer_admin_session_cookie(request, token)
+    _require_admin_user(token)
+    group_name = _sanitize_text_input(str(payload.get('groupName') or ''), 'groupName', min_length=1, max_length=120)
+    exclude_calendar_id_raw = str(payload.get('excludeCalendarId') or '').strip()
+    exclude_calendar_id = _sanitize_id_input(exclude_calendar_id_raw, 'excludeCalendarId') if exclude_calendar_id_raw else ''
+    avoid_color = _parse_hex_color(str(payload.get('avoidColor') or '').strip())
+
+    with _db_session() as session:
+        linked_calendar_ids = session.scalars(
+            select(CalendarGroupLinkORM.calendar_id)
+            .where(CalendarGroupLinkORM.group_name == group_name)
+            .order_by(CalendarGroupLinkORM.calendar_id.asc())
+        ).all()
+        fallback_calendar_ids = session.scalars(
+            select(CalendarORM.id)
+            .where(CalendarORM.group_name == group_name)
+            .order_by(CalendarORM.id.asc())
+        ).all()
+        calendar_ids = {str(calendar_id) for calendar_id in [*linked_calendar_ids, *fallback_calendar_ids] if calendar_id}
+        if exclude_calendar_id:
+            calendar_ids.discard(exclude_calendar_id)
+
+        existing_colors_raw = session.scalars(
+            select(CalendarORM.color)
+            .where(CalendarORM.id.in_(sorted(calendar_ids)))
+            .order_by(CalendarORM.id.asc())
+        ).all() if calendar_ids else []
+
+        all_color_rows = session.execute(
+            select(CalendarORM.id, CalendarORM.color)
+            .where(CalendarORM.color.isnot(None))
+            .order_by(CalendarORM.id.asc())
+        ).all()
+
+    shared_group_colors = [parsed for parsed in (_parse_hex_color(value) for value in existing_colors_raw) if parsed is not None]
+    all_other_colors: list[tuple[int, int, int]] = []
+    for calendar_id_value, raw_color in all_color_rows:
+        calendar_id_text = str(calendar_id_value or '').strip()
+        if exclude_calendar_id and calendar_id_text == exclude_calendar_id:
+            continue
+        if calendar_id_text in calendar_ids:
+            continue
+        parsed_color = _parse_hex_color(raw_color)
+        if parsed_color is not None:
+            all_other_colors.append(parsed_color)
+
+    candidates = _pleasant_candidate_colors()
+    for _ in range(96):
+        hue = secrets.randbelow(360) / 360.0
+        lightness = (46 + secrets.randbelow(15)) / 100.0
+        saturation = (62 + secrets.randbelow(23)) / 100.0
+        red_f, green_f, blue_f = colorsys.hls_to_rgb(hue, lightness, saturation)
+        candidates.append((
+            int(round(red_f * 255)),
+            int(round(green_f * 255)),
+            int(round(blue_f * 255)),
+        ))
+    candidates = list(dict.fromkeys(candidates))
+
+    if not shared_group_colors and not all_other_colors and avoid_color is None:
+        return {'ok': True, 'color': _rgb_to_hex(candidates[secrets.randbelow(len(candidates))])}
+
+    scored: list[tuple[float, tuple[int, int, int]]] = []
+    for candidate in candidates:
+        shared_min = min((_rgb_distance_sq(candidate, target) for target in shared_group_colors), default=0)
+        global_min = min((_rgb_distance_sq(candidate, target) for target in all_other_colors), default=0)
+        avoid_dist = _rgb_distance_sq(candidate, avoid_color) if avoid_color is not None else 0
+        # Keep the selected/shared group as the strongest distinctness signal.
+        candidate_score = (shared_min * 1.0) + (global_min * 0.35) + (avoid_dist * 0.45)
+        scored.append((candidate_score, candidate))
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    top_count = max(8, min(18, len(scored)))
+    chosen_score, chosen_candidate = scored[secrets.randbelow(top_count)]
+    # Avoid near-identical suggestions when possible.
+    if avoid_color is not None and _rgb_distance_sq(chosen_candidate, avoid_color) < 2000 and len(scored) > top_count:
+        chosen_score, chosen_candidate = scored[top_count]
+
+    return {'ok': True, 'color': _rgb_to_hex(chosen_candidate), 'score': chosen_score}
+
+
 @router.put('/api/admin/groups/{group_name}')
 def rename_group_for_admin(group_name: str, payload: GroupCreateRequest, token: str | None = None) -> dict[str, Any]:
     _require_admin_user(token)
@@ -958,19 +1292,45 @@ def rename_group_for_admin(group_name: str, payload: GroupCreateRequest, token: 
 
             affected_user_ids.extend(_approved_user_ids_for_group(session, old_name))
 
-            group.name = new_name
+            session.add(GroupORM(name=new_name))
+
             calendars = session.scalars(select(CalendarORM).where(CalendarORM.group_name == old_name)).all()
             moved_calendar_ids = [calendar.id for calendar in calendars]
             for calendar in calendars:
                 calendar.group_name = new_name
-                _replace_calendar_group_links(session, calendar.id, [new_name])
-            users_in_group = session.scalars(
-                select(GroupUserLinkORM.user_id).where(GroupUserLinkORM.group_name == old_name)
-            ).all()
-            for user_id in users_in_group:
-                _replace_user_group_links(session, user_id, [new_name])
-            _refresh_user_group_names(session, [str(user_id) for user_id in users_in_group])
 
+            calendar_links = session.scalars(
+                select(CalendarGroupLinkORM).where(CalendarGroupLinkORM.group_name == old_name)
+            ).all()
+            for link in calendar_links:
+                existing_new_link = session.get(CalendarGroupLinkORM, (link.calendar_id, new_name))
+                if existing_new_link is not None:
+                    session.delete(link)
+                else:
+                    link.group_name = new_name
+                moved_calendar_ids.append(str(link.calendar_id))
+
+            user_links = session.scalars(
+                select(GroupUserLinkORM).where(GroupUserLinkORM.group_name == old_name)
+            ).all()
+            for link in user_links:
+                existing_new_link = session.get(GroupUserLinkORM, (new_name, link.user_id))
+                if existing_new_link is not None:
+                    existing_status = str(existing_new_link.status or '').strip().lower()
+                    old_status = str(link.status or '').strip().lower()
+                    if existing_status != 'approved' and old_status == 'approved':
+                        existing_new_link.status = 'approved'
+                        existing_new_link.requested_at = link.requested_at
+                        existing_new_link.approved_by_user_id = link.approved_by_user_id
+                        existing_new_link.approved_at = link.approved_at
+                    session.delete(link)
+                else:
+                    link.group_name = new_name
+
+            session.delete(group)
+            affected_user_ids.extend(_approved_user_ids_for_group(session, new_name))
+
+    moved_calendar_ids = sorted({calendar_id for calendar_id in moved_calendar_ids if calendar_id})
     if moved_calendar_ids:
         _publish_calendar_change('calendar_changed', entity_id=old_name, calendar_ids=moved_calendar_ids)
     _publish_user_resource_updates(affected_user_ids)
@@ -998,19 +1358,39 @@ def delete_group_for_admin(group_name: str, token: str | None = None) -> dict[st
             affected_user_ids.extend(_approved_user_ids_for_group(session, 'General'))
 
             _ensure_group_names(session, ['General'])
-            calendars = session.scalars(select(CalendarORM).where(CalendarORM.group_name == group_name)).all()
-            moved_calendar_ids = [calendar.id for calendar in calendars]
-            for calendar in calendars:
-                calendar.group_name = 'General'
-                _replace_calendar_group_links(session, calendar.id, ['General'])
-            session.delete(group)
-            users_in_group = session.scalars(
-                select(GroupUserLinkORM.user_id).where(GroupUserLinkORM.group_name == group_name)
-            ).all()
-            for user_id in users_in_group:
-                _replace_user_group_links(session, user_id, [])
-            _refresh_user_group_names(session, [str(user_id) for user_id in users_in_group])
 
+            calendar_links = session.scalars(
+                select(CalendarGroupLinkORM).where(CalendarGroupLinkORM.group_name == group_name)
+            ).all()
+            linked_calendar_ids = sorted({str(link.calendar_id) for link in calendar_links if link.calendar_id})
+            for link in calendar_links:
+                session.delete(link)
+
+            calendars_with_primary_group = session.scalars(
+                select(CalendarORM).where(CalendarORM.group_name == group_name)
+            ).all()
+            moved_calendar_ids = [calendar.id for calendar in calendars_with_primary_group]
+            for calendar in calendars_with_primary_group:
+                remaining_group_names = session.scalars(
+                    select(CalendarGroupLinkORM.group_name)
+                    .where(CalendarGroupLinkORM.calendar_id == calendar.id)
+                    .order_by(CalendarGroupLinkORM.group_name.asc())
+                ).all()
+                next_primary_group = str(remaining_group_names[0]) if remaining_group_names else 'General'
+                calendar.group_name = next_primary_group
+                if next_primary_group == 'General' and session.get(CalendarGroupLinkORM, (calendar.id, 'General')) is None:
+                    session.add(CalendarGroupLinkORM(calendar_id=calendar.id, group_name='General'))
+
+            user_links = session.scalars(
+                select(GroupUserLinkORM).where(GroupUserLinkORM.group_name == group_name)
+            ).all()
+            for link in user_links:
+                session.delete(link)
+
+            session.delete(group)
+            moved_calendar_ids.extend(linked_calendar_ids)
+
+    moved_calendar_ids = sorted({calendar_id for calendar_id in moved_calendar_ids if calendar_id})
     if moved_calendar_ids:
         _publish_calendar_change('calendar_changed', entity_id=group_name, calendar_ids=moved_calendar_ids)
     _publish_user_resource_updates(affected_user_ids)
@@ -1038,16 +1418,72 @@ def update_calendar_group_for_admin(
             group_exists = session.scalar(select(GroupORM.name).where(GroupORM.name == group_name))
             if group_exists is None:
                 raise HTTPException(status_code=404, detail='Group not found.')
-            prior_group_name = str(calendar.group_name or 'General')
-            calendar.group_name = group_name
-            _replace_calendar_group_links(session, calendar.id, [group_name])
-            affected_groups = {prior_group_name, group_name}
+            existing_group_names = set(session.scalars(
+                select(CalendarGroupLinkORM.group_name)
+                .where(CalendarGroupLinkORM.calendar_id == calendar.id)
+            ).all())
+            if group_name not in existing_group_names:
+                existing_group_names.add(group_name)
+                _replace_calendar_group_links(session, calendar.id, sorted(existing_group_names))
+            affected_groups = set(existing_group_names)
+            affected_groups.add(str(calendar.group_name or 'General'))
             for affected_group in affected_groups:
                 affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
 
     _publish_calendar_change('calendar_changed', entity_id=calendar_id, calendar_ids=[calendar_id])
     _publish_user_resource_updates(affected_user_ids)
     return {'ok': True, 'calendarId': calendar_id, 'groupName': group_name}
+
+
+@router.delete('/api/admin/calendars/{calendar_id}/groups/{group_name}')
+def remove_calendar_from_group_for_admin(
+    calendar_id: str,
+    group_name: str,
+    request: Request,
+    token: str | None = None,
+) -> dict[str, Any]:
+    token = _prefer_admin_session_cookie(request, token)
+    _require_admin_user(token)
+    calendar_id = _sanitize_id_input(calendar_id, 'calendar_id')
+    group_name = _sanitize_text_input(group_name, 'group_name', min_length=1, max_length=120)
+    affected_user_ids: list[str] = []
+
+    with DB_LOCK:
+        with _db_session() as session:
+            calendar = session.get(CalendarORM, calendar_id)
+            if calendar is None:
+                raise HTTPException(status_code=404, detail='Calendar not found.')
+
+            existing_group_names = {
+                str(value).strip()
+                for value in session.scalars(
+                    select(CalendarGroupLinkORM.group_name)
+                    .where(CalendarGroupLinkORM.calendar_id == calendar.id)
+                ).all()
+                if str(value or '').strip()
+            }
+            current_primary_group = str(calendar.group_name or 'General').strip() or 'General'
+            if current_primary_group:
+                existing_group_names.add(current_primary_group)
+
+            if group_name not in existing_group_names:
+                raise HTTPException(status_code=404, detail='Calendar is not assigned to that group.')
+
+            updated_group_names = set(existing_group_names)
+            updated_group_names.discard(group_name)
+
+            _replace_calendar_group_links(session, calendar.id, sorted(updated_group_names))
+
+            if updated_group_names and current_primary_group not in updated_group_names:
+                calendar.group_name = sorted(updated_group_names)[0]
+
+            affected_groups = {group_name, *updated_group_names, current_primary_group, str(calendar.group_name or 'General')}
+            for affected_group in affected_groups:
+                affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
+
+    _publish_calendar_change('calendar_changed', entity_id=calendar_id, calendar_ids=[calendar_id])
+    _publish_user_resource_updates(affected_user_ids)
+    return {'ok': True, 'calendarId': calendar_id, 'removedGroupName': group_name}
 
 
 @router.put('/api/admin/calendars/{calendar_id}')
@@ -1085,11 +1521,16 @@ def update_calendar_for_admin(
             prior_group_name = str(calendar.group_name or 'General')
             calendar.name = name
             calendar.group_name = group_name
-            _replace_calendar_group_links(session, calendar.id, [group_name])
+            existing_group_names = set(session.scalars(
+                select(CalendarGroupLinkORM.group_name)
+                .where(CalendarGroupLinkORM.calendar_id == calendar.id)
+            ).all())
+            existing_group_names.add(group_name)
+            _replace_calendar_group_links(session, calendar.id, sorted(existing_group_names))
             calendar.color = color
             calendar.blurb = blurb
             calendar.image_url = image_url
-            affected_groups = {prior_group_name, group_name}
+            affected_groups = {prior_group_name, *existing_group_names}
             for affected_group in affected_groups:
                 affected_user_ids.extend(_approved_user_ids_for_group(session, affected_group))
 
@@ -1168,12 +1609,16 @@ def create_group_resource_for_admin(
                 select(CalendarORM).where(func.lower(CalendarORM.name) == resource_name.lower())
             )
             if existing_resource is not None:
-                prior_group_name = str(existing_resource.group_name or 'General')
-                existing_resource.group_name = group_name
-                _replace_calendar_group_links(session, existing_resource.id, [group_name])
+                existing_group_names = set(session.scalars(
+                    select(CalendarGroupLinkORM.group_name)
+                    .where(CalendarGroupLinkORM.calendar_id == existing_resource.id)
+                ).all())
+                existing_group_names.add(group_name)
+                _replace_calendar_group_links(session, existing_resource.id, sorted(existing_group_names))
                 created = False
                 calendar_id = existing_resource.id
-                affected_groups = {prior_group_name, group_name}
+                affected_groups = set(existing_group_names)
+                affected_groups.add(str(existing_resource.group_name or 'General'))
             else:
                 calendar_id = str(uuid4())
                 session.add(CalendarORM(id=calendar_id, name=resource_name, group_name=group_name))
@@ -1234,7 +1679,6 @@ def create_user_for_admin(payload: AdminUserCreateRequest, token: str | None = N
                 role=DEFAULT_USER_ROLE,
                 login_token=login_token,
                 picture_url=None,
-                group_name=None,
                 created_at=now_str,
                 last_login=now_str,
             )
@@ -1264,11 +1708,95 @@ def create_user_for_admin(payload: AdminUserCreateRequest, token: str | None = N
             'email': user_email,
             'name': user_name,
             'role': DEFAULT_USER_ROLE,
+            'serviceAccount': False,
             'calendarIds': calendar_ids,
             'groupNames': group_names,
         },
         'token': login_token,
         'loginUrl': f'{APP_BASE_URL}/?token={login_token}',
+    }
+
+
+@router.put('/api/admin/users/{user_id}/service-account')
+def update_user_service_account_for_admin(
+    user_id: str,
+    payload: dict[str, Any],
+    token: str | None = None,
+) -> dict[str, Any]:
+    _require_admin_user(token)
+    user_id = _sanitize_id_input(user_id, 'user_id')
+    service_account = bool(payload.get('serviceAccount'))
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+            user.service_account = service_account
+
+    return {'ok': True, 'userId': user_id, 'serviceAccount': service_account}
+
+
+@router.get('/api/users/me/login-token')
+def get_own_login_token(token: str | None = None) -> dict[str, Any]:
+    actor = _require_authenticated_user(token)
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, actor['id'])
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+            login_token = str(user.login_token or '').strip()
+            if not login_token:
+                login_token = _generate_unique_login_token(session)
+                user.login_token = login_token
+
+    return {
+        'ok': True,
+        'userId': actor['id'],
+        'loginToken': login_token,
+        'loginUrl': f'{APP_BASE_URL}/?token={login_token}',
+    }
+
+
+@router.post('/api/users/me/login-token/regenerate')
+def regenerate_own_login_token(token: str | None = None) -> dict[str, Any]:
+    actor = _require_authenticated_user(token)
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, actor['id'])
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+            new_login_token = _generate_unique_login_token(session)
+            user.login_token = new_login_token
+
+    return {
+        'ok': True,
+        'userId': actor['id'],
+        'loginToken': new_login_token,
+        'loginUrl': f'{APP_BASE_URL}/?token={new_login_token}',
+    }
+
+
+@router.post('/api/admin/users/{user_id}/login-token/regenerate')
+def regenerate_user_login_token_for_admin(user_id: str, token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    user_id = _sanitize_id_input(user_id, 'user_id')
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+            new_login_token = _generate_unique_login_token(session)
+            user.login_token = new_login_token
+
+    return {
+        'ok': True,
+        'userId': user_id,
+        'loginToken': new_login_token,
+        'loginUrl': f'{APP_BASE_URL}/?token={new_login_token}',
     }
 
 
@@ -1318,9 +1846,17 @@ def claim_url_token_resources_for_cookie_user(
     url_token: str,
     request: Request,
     payload: CalendarAccessClaimRequest | None = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
     url_token = _sanitize_token_input(url_token, 'url_token')
-    session_token = request.cookies.get('session_token')
+    session_token = str(token or '').strip()
+    if session_token:
+        try:
+            session_token = _sanitize_token_input(session_token, 'token')
+        except HTTPException:
+            session_token = ''
+    if not session_token:
+        session_token = str(request.cookies.get('session_token') or '').strip()
     if not session_token:
         raise HTTPException(status_code=401, detail='Login required.')
 
@@ -1338,30 +1874,17 @@ def claim_url_token_resources_for_cookie_user(
             if session_user is None:
                 raise HTTPException(status_code=401, detail='Login required.')
 
-            source_calendar_ids = sorted(_get_user_allowed_calendars(session, source_user_id) or set())
-            if claim_calendar_ids:
-                invalid_ids = [
-                    cal_id for cal_id in claim_calendar_ids
-                    if cal_id not in source_calendar_ids
-                ]
-                if invalid_ids:
-                    raise HTTPException(status_code=400, detail=f'Unknown resources: {", ".join(invalid_ids)}')
-            else:
-                claim_calendar_ids = source_calendar_ids
-
-            current_calendar_ids = sorted(_get_user_allowed_calendars(session, session_user['id']) or set())
-            merged_calendar_ids = sorted(set(current_calendar_ids).union(claim_calendar_ids))
             target_user = session.get(UserORM, session_user['id'])
             if target_user:
-                now_str = datetime.now().astimezone().isoformat()
-                _replace_user_calendar_links(
+                merge_result = _merge_user_access_from_source(
                     session,
-                    target_user.id,
-                    merged_calendar_ids,
+                    source_user_id=source_user_id,
+                    target_user_id=target_user.id,
+                    requested_calendar_ids=claim_calendar_ids if claim_calendar_ids else None,
                     approved_by_user_id=target_user.id,
-                    approved_at=now_str,
-                    requested_at=now_str,
                 )
+                _record_user_saved_share_link(session, target_user.id, source_user_id)
+                claim_calendar_ids = sorted(merge_result.get('claimedCalendarIds') or [])
 
     _publish_user_resources_updated(session_user['id'])
     return {'ok': True, 'claimed': True, 'userId': session_user['id'], 'calendarIds': claim_calendar_ids}

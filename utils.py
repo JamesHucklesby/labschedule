@@ -1,5 +1,6 @@
 import calendar
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -50,9 +51,18 @@ def _sanitize_id_input(value: str, field_name: str) -> str:
 
 def _sanitize_token_input(value: str, field_name: str = 'token') -> str:
     normalized = _sanitize_text_input(value, field_name, min_length=16, max_length=MAX_TOKEN_INPUT_LENGTH)
-    if not _TOKEN_PATTERN.fullmatch(normalized):
+    # Preserve JWT tokens exactly because lowercasing/stripping changes signature bytes.
+    if normalized.count('.') == 2:
+        if not re.fullmatch(r'[A-Za-z0-9._-]{16,1024}', normalized):
+            raise HTTPException(status_code=400, detail=f'{field_name} has an invalid format.')
+        return normalized
+
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', normalized).lower()
+    if len(cleaned) < 16:
         raise HTTPException(status_code=400, detail=f'{field_name} has an invalid format.')
-    return normalized
+    if not _TOKEN_PATTERN.fullmatch(cleaned):
+        raise HTTPException(status_code=400, detail=f'{field_name} has an invalid format.')
+    return cleaned
 
 
 def _sanitize_email_input(value: str, field_name: str = 'email') -> str:

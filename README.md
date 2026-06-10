@@ -65,6 +65,28 @@ You can also run the app and PostgreSQL together with:
 docker compose up --build
 ```
 
+Automated backups are handled by `scripts/backup_postgres.py` and are started by the app container at boot via `scripts/start_app_with_backup.sh`.
+The app Docker image installs `pg_dump` from PostgreSQL 18 client packages to match the database server version.
+The script:
+- creates a full SQL dump using `pg_dump`,
+- compresses each dump to a `.zip` file in `./backups/`,
+- removes backup `.zip` files older than 30 days,
+- runs every 24 hours by default.
+
+You can tune behavior with env vars in Compose: `BACKUP_ENABLED`, `BACKUP_INTERVAL_HOURS`, and `BACKUP_RETENTION_DAYS`.
+
+Run it once:
+
+```bash
+python scripts/backup_postgres.py --run-once
+```
+
+Run continuously (24-hour interval):
+
+```bash
+python scripts/backup_postgres.py
+```
+
 If Docker reports a credential-helper error while pulling `python:3.11-slim`, run the Windows helper instead:
 
 ```powershell
