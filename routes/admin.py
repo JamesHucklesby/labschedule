@@ -11,7 +11,8 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from auth import (
     _get_user_allowed_calendars,
@@ -1149,6 +1150,172 @@ def list_users_for_admin(token: str | None = None) -> dict[str, Any]:
     return {'users': users, 'resources': resources, 'resourceGroups': resource_groups, 'groups': groups, 'accessRequests': access_requests}
 
 
+@router.get('/api/admin/postgres-performance')
+def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+
+    def _interval_to_ms(value: Any) -> int:
+        if value is None:
+            return 0
+        total_seconds = getattr(value, 'total_seconds', None)
+        if callable(total_seconds):
+            return int(total_seconds() * 1000)
+        try:
+            return int(float(value) * 1000)
+        except Exception:
+            return 0
+
+    def _to_int(value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except Exception:
+            return 0
+
+    with _db_session() as session:
+        db_stats_row = session.execute(
+            text(
+                '''
+                SELECT
+                    numbackends,
+                    xact_commit,
+                    xact_rollback,
+                    blks_read,
+                    blks_hit,
+                    tup_returned,
+                    tup_fetched,
+                    tup_inserted,
+                    tup_updated,
+                    tup_deleted,
+                    deadlocks,
+                    temp_files,
+                    temp_bytes
+                FROM pg_stat_database
+                WHERE datname = current_database()
+                '''
+            )
+        ).mappings().first()
+
+        activity_rows = session.execute(
+            text(
+                '''
+                SELECT
+                    pid,
+                    usename,
+                    application_name,
+                    state,
+                    wait_event_type,
+                    wait_event,
+                    backend_type,
+                    now() - query_start AS query_age,
+                    now() - xact_start AS xact_age,
+                    LEFT(REGEXP_REPLACE(COALESCE(query, ''), '\\s+', ' ', 'g'), 320) AS query_snippet
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                ORDER BY query_start DESC NULLS LAST
+                LIMIT 30
+                '''
+            )
+        ).mappings().all()
+
+        top_statements: list[dict[str, Any]] = []
+        top_statements_error = ''
+        try:
+            statement_rows = session.execute(
+                text(
+                    '''
+                    SELECT
+                        LEFT(REGEXP_REPLACE(COALESCE(query, ''), '\\s+', ' ', 'g'), 320) AS query_snippet,
+                        calls,
+                        total_exec_time,
+                        mean_exec_time,
+                        rows
+                    FROM pg_stat_statements
+                    ORDER BY total_exec_time DESC
+                    LIMIT 50
+                    '''
+                )
+            ).mappings().all()
+            for row in statement_rows:
+                top_statements.append({
+                    'query': str(row.get('query_snippet') or '').strip(),
+                    'calls': _to_int(row.get('calls')),
+                    'totalExecMs': float(row.get('total_exec_time') or 0.0),
+                    'meanExecMs': float(row.get('mean_exec_time') or 0.0),
+                    'rows': _to_int(row.get('rows')),
+                })
+        except SQLAlchemyError:
+            top_statements_error = 'pg_stat_statements not available on this server.'
+
+    active_queries: list[dict[str, Any]] = []
+    active_sessions = 0
+    blocked_sessions = 0
+    idle_in_transaction_sessions = 0
+    max_transaction_age_ms = 0
+
+    for row in activity_rows:
+        state = str(row.get('state') or '').strip().lower()
+        wait_event_type = str(row.get('wait_event_type') or '').strip()
+        query_duration_ms = _interval_to_ms(row.get('query_age'))
+        transaction_age_ms = _interval_to_ms(row.get('xact_age'))
+        if state == 'active':
+            active_sessions += 1
+        if state == 'idle in transaction':
+            idle_in_transaction_sessions += 1
+        if wait_event_type.lower() == 'lock':
+            blocked_sessions += 1
+        if transaction_age_ms > max_transaction_age_ms:
+            max_transaction_age_ms = transaction_age_ms
+
+        query_text = str(row.get('query_snippet') or '').strip()
+        if not query_text or query_text.upper() in {'', '<IDLE>'}:
+            continue
+
+        active_queries.append({
+            'pid': _to_int(row.get('pid')),
+            'user': str(row.get('usename') or '').strip(),
+            'application': str(row.get('application_name') or '').strip(),
+            'state': state or 'unknown',
+            'waitEventType': wait_event_type,
+            'waitEvent': str(row.get('wait_event') or '').strip(),
+            'backendType': str(row.get('backend_type') or '').strip(),
+            'queryDurationMs': query_duration_ms,
+            'transactionAgeMs': transaction_age_ms,
+            'query': query_text,
+        })
+
+    blks_read = _to_int((db_stats_row or {}).get('blks_read'))
+    blks_hit = _to_int((db_stats_row or {}).get('blks_hit'))
+    cache_hit_ratio = 0.0
+    if (blks_read + blks_hit) > 0:
+        cache_hit_ratio = (blks_hit / (blks_read + blks_hit)) * 100.0
+
+    return {
+        'capturedAt': datetime.now().astimezone().isoformat(),
+        'summary': {
+            'connections': _to_int((db_stats_row or {}).get('numbackends')),
+            'activeSessions': active_sessions,
+            'blockedSessions': blocked_sessions,
+            'idleInTransaction': idle_in_transaction_sessions,
+            'maxTransactionAgeMs': max_transaction_age_ms,
+            'cacheHitRatioPct': round(cache_hit_ratio, 2),
+            'xactCommit': _to_int((db_stats_row or {}).get('xact_commit')),
+            'xactRollback': _to_int((db_stats_row or {}).get('xact_rollback')),
+            'deadlocks': _to_int((db_stats_row or {}).get('deadlocks')),
+            'tempFiles': _to_int((db_stats_row or {}).get('temp_files')),
+            'tempBytes': _to_int((db_stats_row or {}).get('temp_bytes')),
+            'tupInserted': _to_int((db_stats_row or {}).get('tup_inserted')),
+            'tupUpdated': _to_int((db_stats_row or {}).get('tup_updated')),
+            'tupDeleted': _to_int((db_stats_row or {}).get('tup_deleted')),
+        },
+        'activeQueries': active_queries,
+        'topStatements': top_statements,
+        'topStatementsError': top_statements_error,
+    }
+
+
 @router.get('/api/admin/groups')
 def list_groups_for_admin(token: str | None = None) -> dict[str, Any]:
     _require_admin_user(token)
@@ -1683,6 +1850,8 @@ def create_user_for_admin(payload: AdminUserCreateRequest, token: str | None = N
                 last_login=now_str,
             )
             session.add(user)
+            # Flush first so dependent link-table inserts can satisfy FK constraints.
+            session.flush()
             _replace_user_calendar_links(
                 session,
                 user.id,

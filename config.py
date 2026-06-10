@@ -1,5 +1,6 @@
 import os
 import re
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -22,15 +23,35 @@ _DEFAULT_APP_SECRET_KEY = 'dev-secret-key-change-in-production'
 APP_SECRET_KEY = os.getenv('APP_SECRET_KEY', _DEFAULT_APP_SECRET_KEY)
 APP_BASE_URL = os.getenv('APP_BASE_URL', 'http://localhost:8080').strip().rstrip('/')
 APP_ENV = os.getenv('APP_ENV', 'development').strip().lower()
+IS_PRODUCTION = APP_ENV in {'production', 'prod'}
 SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'auto').strip().lower()
 TRUSTED_PROXY_IPS = {
     ip.strip()
     for ip in os.getenv('TRUSTED_PROXY_IPS', '127.0.0.1,::1').split(',')
     if ip.strip()
 }
+APP_ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('APP_ALLOWED_HOSTS', 'localhost,127.0.0.1,::1').split(',')
+    if host.strip()
+]
+ENABLE_SECURITY_HEADERS = os.getenv('ENABLE_SECURITY_HEADERS', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+ENABLE_GZIP = os.getenv('ENABLE_GZIP', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
+GZIP_MINIMUM_SIZE = int(os.getenv('GZIP_MINIMUM_SIZE', '500'))
 
-if APP_ENV in {'production', 'prod'} and APP_SECRET_KEY == _DEFAULT_APP_SECRET_KEY:
+if IS_PRODUCTION and APP_SECRET_KEY == _DEFAULT_APP_SECRET_KEY:
     raise RuntimeError('APP_SECRET_KEY must be set to a strong secret in production.')
+
+if IS_PRODUCTION and SESSION_COOKIE_SECURE == 'false':
+    raise RuntimeError('SESSION_COOKIE_SECURE cannot be false in production.')
+
+if IS_PRODUCTION:
+    parsed_base_url = urlparse(APP_BASE_URL)
+    if parsed_base_url.scheme != 'https':
+        raise RuntimeError('APP_BASE_URL must use https in production.')
+
+if not APP_ALLOWED_HOSTS:
+    raise RuntimeError('APP_ALLOWED_HOSTS must include at least one host value.')
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv('DATABASE_URL', '').strip() or None

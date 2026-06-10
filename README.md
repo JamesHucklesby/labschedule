@@ -70,10 +70,23 @@ The app Docker image installs `pg_dump` from PostgreSQL 18 client packages to ma
 The script:
 - creates a full SQL dump using `pg_dump`,
 - compresses each dump to a `.zip` file in `./backups/`,
+- keeps at most one backup for any 24-hour period,
 - removes backup `.zip` files older than 30 days,
 - runs every 24 hours by default.
 
 You can tune behavior with env vars in Compose: `BACKUP_ENABLED`, `BACKUP_INTERVAL_HOURS`, and `BACKUP_RETENTION_DAYS`.
+
+For secure production deployment, set these app environment variables:
+- `APP_ENV=production`
+- `APP_BASE_URL=https://<your-domain>`
+- `APP_SECRET_KEY=<strong-random-secret>`
+- `SESSION_COOKIE_SECURE=true`
+- `APP_ALLOWED_HOSTS=<your-domain,localhost>`
+
+Optional runtime hardening and optimization:
+- `ENABLE_SECURITY_HEADERS=1`
+- `ENABLE_GZIP=1`
+- `GZIP_MINIMUM_SIZE=500`
 
 Run it once:
 
@@ -117,7 +130,7 @@ That helper runs Compose with a clean `DOCKER_CONFIG`, which bypasses broken sav
 - `GET /api/calendars?token=<token>` — List accessible calendars
 
 ### WebSocket
-- `WS /ws/calendar-updates?token=<token>` — Real-time calendar updates
+- `WS /ws/calendar-updates` — Single real-time channel for calendar and access updates
 
 ### Authentication
 - `GET /auth/google-login` — Initiate Google OAuth flow

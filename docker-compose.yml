@@ -1,6 +1,12 @@
 services:
   db:
     image: postgres:18-alpine
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     restart: unless-stopped
     container_name: labschedule_db
     user: root
@@ -31,8 +37,18 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-calendar}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-calendar}
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: ${APP_POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${APP_POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-calendar}
+      POSTGRES_USER: ${POSTGRES_USER:-calendar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      APP_ENV: ${APP_ENV:-development}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      APP_ALLOWED_HOSTS: ${APP_ALLOWED_HOSTS:-*}
+      ENABLE_SECURITY_HEADERS: ${ENABLE_SECURITY_HEADERS:-1}
+      ENABLE_GZIP: ${ENABLE_GZIP:-1}
+      GZIP_MINIMUM_SIZE: ${GZIP_MINIMUM_SIZE:-500}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8080/auth/callback}
       BACKUP_ENABLED: ${BACKUP_ENABLED:-1}
       BACKUP_POSTGRES_HOST: db
@@ -43,6 +59,11 @@ services:
       - /zs/labschedule/backups:/app/backups
     ports:
       - "8088:777"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:777/', timeout=3)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
     networks:
       - web
 

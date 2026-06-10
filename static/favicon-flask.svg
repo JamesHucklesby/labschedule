@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LabSchedule flask">
+  <path d="M24 6h16v6h-2v13l13 21a8 8 0 0 1-7 12H20a8 8 0 0 1-7-12l13-21V12h-2z" fill="#16a34a" stroke="#14532d" stroke-width="2"/>
+  <path d="M21 46h22" stroke="#bbf7d0" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="28" cy="39" r="2" fill="#dcfce7"/>
+  <circle cx="36" cy="43" r="2" fill="#dcfce7"/>
+</svg>

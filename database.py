@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DatabaseError as SQLAlchemyDatabaseError
+from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
 from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session
 
@@ -274,25 +275,47 @@ def _upsert_user_group_link(
     requested_at: str | None = None,
     approved_at: str | None = None,
 ) -> None:
-    effective_requested_at = requested_at or approved_at or datetime.now().astimezone().isoformat()
-    session.execute(
-        pg_insert(GroupUserLinkORM).values(
-            group_name=group_name,
-            user_id=user_id,
-            status=status,
-            requested_at=effective_requested_at,
-            approved_by_user_id=approved_by_user_id,
-            approved_at=approved_at,
-        ).on_conflict_do_update(
-            index_elements=[GroupUserLinkORM.group_name, GroupUserLinkORM.user_id],
-            set_={
-                'status': status,
-                'requested_at': effective_requested_at,
-                'approved_by_user_id': approved_by_user_id,
-                'approved_at': approved_at,
-            },
-        )
+    user_exists = session.scalar(
+        select(UserORM.id)
+        .where(UserORM.id == user_id)
+        .limit(1)
     )
+    if user_exists is None:
+        raise HTTPException(status_code=404, detail='User not found.')
+
+    group_exists = session.scalar(
+        select(GroupORM.name)
+        .where(GroupORM.name == group_name)
+        .limit(1)
+    )
+    if group_exists is None:
+        raise HTTPException(status_code=404, detail='Group not found.')
+
+    effective_requested_at = requested_at or approved_at or datetime.now().astimezone().isoformat()
+    try:
+        session.execute(
+            pg_insert(GroupUserLinkORM).values(
+                group_name=group_name,
+                user_id=user_id,
+                status=status,
+                requested_at=effective_requested_at,
+                approved_by_user_id=approved_by_user_id,
+                approved_at=approved_at,
+            ).on_conflict_do_update(
+                index_elements=[GroupUserLinkORM.group_name, GroupUserLinkORM.user_id],
+                set_={
+                    'status': status,
+                    'requested_at': effective_requested_at,
+                    'approved_by_user_id': approved_by_user_id,
+                    'approved_at': approved_at,
+                },
+            )
+        )
+    except SQLAlchemyIntegrityError as exc:
+        message = str(exc).lower()
+        if 'group_user_links_user_id_fkey' in message or 'group_user_links_group_name_fkey' in message:
+            raise HTTPException(status_code=404, detail='User or group no longer exists.') from exc
+        raise
 
 
 def _replace_calendar_group_links(session: Session, calendar_id: str, group_names: list[str]) -> None:
@@ -476,6 +499,13 @@ def init_db() -> None:
             flush=True,
         )
 
+        try:
+            conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_stat_statements'))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            print(f'[startup] pg_stat_statements extension unavailable: {exc}', flush=True)
+
         conn.execute(text('DROP TABLE IF EXISTS links'))
         conn.execute(text('DROP TABLE IF EXISTS access_requests'))
 
@@ -563,10 +593,18 @@ def init_db() -> None:
         """))
         conn.commit()
 
-        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_token ON users(login_token)'))
         conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_login_token ON users(email_login_token)'))
-        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_passkeys_user_id ON user_passkeys(user_id)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS idx_users_lab_group ON users(lab_group)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_events_deleted_start ON events(deleted, start)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_events_event_uid_version_id ON events(event_uid, version DESC, id DESC)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_group_user_links_user_status_group ON group_user_links(user_id, status, group_name)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_group_user_links_status_user ON group_user_links(status, user_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_calendar_links_user_status_calendar ON user_calendar_links(user_id, status, calendar_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_calendar_links_status_user ON user_calendar_links(status, user_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_calendar_group_links_group_calendar ON calendar_group_links(group_name, calendar_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_users_role_lower ON users ((lower(role)))'))
+        conn.execute(text('DROP INDEX IF EXISTS idx_users_login_token'))
+        conn.execute(text('DROP INDEX IF EXISTS idx_user_passkeys_user_id'))
         conn.execute(text('ALTER TABLE users ALTER COLUMN lab_group DROP DEFAULT'))
         conn.execute(text('ALTER TABLE users ALTER COLUMN lab_group DROP NOT NULL'))
         conn.execute(text("UPDATE users SET lab_group = NULL WHERE lab_group IS NOT NULL AND trim(lab_group) = ''"))

@@ -1588,11 +1588,12 @@ def index() -> None:
           .sidebar {
             width: 220px;
             flex-shrink: 0;
-            background: #1e293b;
-            color: #e2e8f0;
+            background: #ffffff;
+            color: #0f172a;
             display: flex;
             flex-direction: column;
             overflow-y: auto;
+            border-right: 1px solid #e2e8f0;
           }
           .sidebar-nav-spacer { flex: 1; min-height: 18px; }
           .sidebar-nav-item {
@@ -1602,15 +1603,16 @@ def index() -> None:
             margin: 12px 12px 16px;
             padding: 10px 12px;
             border-radius: 10px;
-            color: #cbd5e1;
+            color: #334155;
             cursor: pointer;
             transition: background 0.15s, color 0.15s;
-            border: 1px solid rgba(148, 163, 184, 0.15);
+            border: 1px solid #e2e8f0;
           }
           .sidebar-nav-item:hover,
           .sidebar-nav-item.active {
-            background: #334155;
-            color: #f8fafc;
+            background: #ecfeff;
+            color: #0f766e;
+            border-color: #99f6e4;
           }
           .sidebar-nav-icon {
             font-size: 0.92rem;
@@ -1622,8 +1624,8 @@ def index() -> None:
             font-size: 1rem;
             font-weight: 800;
             letter-spacing: 0.01em;
-            color: #f8fafc;
-            border-bottom: 1px solid #334155;
+            color: #0f172a;
+            border-bottom: 1px solid #e2e8f0;
             cursor: pointer;
           }
           .sidebar-section-title {
@@ -1632,7 +1634,7 @@ def index() -> None:
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.09em;
-            color: #94a3b8;
+            color: #64748b;
           }
           .sidebar-group-header {
             display: flex;
@@ -1649,7 +1651,7 @@ def index() -> None:
             align-items: center;
             gap: 6px;
             font-size: 0.7rem;
-            color: #94a3b8;
+            color: #64748b;
             cursor: pointer;
             user-select: none;
           }
@@ -1661,7 +1663,7 @@ def index() -> None:
             cursor: pointer;
             transition: background 0.15s;
           }
-          .sidebar-cal-item:hover { background: #334155; }
+          .sidebar-cal-item:hover { background: #f8fafc; }
           .sidebar-cal-meta {
             display: flex;
             align-items: center;
@@ -1673,9 +1675,9 @@ def index() -> None:
             width: 22px;
             height: 22px;
             border-radius: 999px;
-            border: 1px solid #475569;
-            background: #0f172a;
-            color: #e2e8f0;
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            color: #334155;
             font-size: 0.72rem;
             font-weight: 800;
             line-height: 1;
@@ -1686,16 +1688,9 @@ def index() -> None:
             flex-shrink: 0;
           }
           .sidebar-cal-info:hover {
-            background: #1e293b;
-            border-color: #94a3b8;
-          }
-
-          /* Colour dot next to label */
-          .cal-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 3px;
-            flex-shrink: 0;
+            background: #ecfeff;
+            border-color: #99f6e4;
+            color: #0f766e;
           }
 
           /* Custom checkbox whose tick/border adopts the calendar colour via CSS var */
@@ -1721,7 +1716,10 @@ def index() -> None:
             border-top: none; border-left: none;
             transform: rotate(45deg);
           }
-          .cal-name { font-size: 0.86rem; color: #cbd5e1; }
+          .cal-name {
+            font-size: 0.86rem;
+            font-weight: 750;
+          }
 
           /* ── Main content ──────────────────────────── */
           .main-content {
@@ -2043,6 +2041,16 @@ def index() -> None:
             font-size: 0.94rem;
             background: #fff;
           }
+          .settings-profile-field {
+            display: grid;
+            gap: 6px;
+            margin-top: 8px;
+          }
+          .settings-profile-field label {
+            color: #334155;
+            font-size: 0.9rem;
+            font-weight: 600;
+          }
           .admin-helper {
             color: #64748b;
             font-size: 0.82rem;
@@ -2094,6 +2102,29 @@ def index() -> None:
             color: #166534;
             cursor: default;
           }
+          .admin-performance-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+          }
+          .admin-performance-table th,
+          .admin-performance-table td {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 7px 8px;
+            vertical-align: top;
+            text-align: left;
+          }
+          .admin-performance-table th {
+            color: #334155;
+            font-weight: 700;
+            background: #f8fafc;
+          }
+          .admin-performance-query {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            white-space: normal;
+            word-break: break-word;
+            color: #0f172a;
+          }
           .admin-section-title {
             margin-top: 10px;
             margin-bottom: 4px;
@@ -2124,6 +2155,10 @@ def index() -> None:
           /* FullCalendar button theming */
           .fc .fc-button-primary { background:#0e7490; border-color:#0e7490; }
           .fc .fc-button-primary:hover { background:#155e75; border-color:#155e75; }
+          .fc .fc-bg-event.working-hours-highlight {
+            background: rgba(14, 116, 144, 0.14);
+            border: none;
+          }
 
           /* ── Event dialog ──────────────────────────── */
           .event-dialog {
@@ -2564,14 +2599,6 @@ def index() -> None:
               <span class="sidebar-nav-icon">&#128179;</span>
               <span id="token-action-label">Login</span>
             </div>
-            <aside id="ws-status" class="ws-status" aria-live="polite">
-              <div class="ws-status-title">Realtime Sync</div>
-              <div class="ws-status-row">
-                <span id="ws-indicator" class="ws-indicator"></span>
-                <span id="ws-connection-state">Connecting...</span>
-              </div>
-              <div id="ws-last-change">Last change received: never</div>
-            </aside>
           </nav>
 
           <!-- Main area -->
@@ -2583,13 +2610,16 @@ def index() -> None:
               <section class="admin-card">
                 <h2>Profile</h2>
                 <p>Update your name, contact details, and lab group.</p>
-                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                <div class="settings-profile-field">
+                  <label for="settings-profile-name-input">Name</label>
                   <input id="settings-profile-name-input" class="admin-datalist-input" type="text" maxlength="120" placeholder="Name" />
                 </div>
-                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                <div class="settings-profile-field">
+                  <label for="settings-profile-contact-input">Contact details</label>
                   <input id="settings-profile-contact-input" class="admin-datalist-input" type="text" maxlength="254" placeholder="Contact" />
                 </div>
-                <div class="admin-editor-row" style="grid-template-columns: minmax(220px, 1fr); margin-top: 8px;">
+                <div class="settings-profile-field">
+                  <label for="settings-profile-lab-group-input">Lab group</label>
                   <input id="settings-profile-lab-group-input" class="admin-datalist-input" list="settings-profile-lab-group-options" type="text" maxlength="120" placeholder="Lab group" />
                   <datalist id="settings-profile-lab-group-options"></datalist>
                 </div>
@@ -2639,6 +2669,11 @@ def index() -> None:
                 <h2>Access Requests</h2>
                 <p>Review pending requests and hidden access rows.</p>
                 <div id="admin-access-requests-grid" class="admin-link-grid"></div>
+              </section>
+              <section class="admin-card">
+                <h2>PostgreSQL Performance Logs</h2>
+                <p>Live database activity snapshot for troubleshooting slowdowns and lock contention.</p>
+                <div id="admin-postgres-performance-grid" class="admin-link-grid"></div>
               </section>
             </div>
           </div>
@@ -2821,9 +2856,8 @@ def index() -> None:
     ''')
 
     # Standalone offline guard — injected as initial page HTML, runs immediately
-    # on parse (no FullCalendar or calendar-WS dependency). Hooks window.socket
-    # the moment socket.io is ready so the overlay fires even if the server drops
-    # before FullCalendar finishes loading. Also prevents automatic page reloads.
+    # on parse (no FullCalendar or calendar-WS dependency). Also prevents
+    # automatic page reloads.
     ui.add_body_html('''
 <style id="page-fouc-hide">body{opacity:0!important}</style>
 <script>
@@ -2869,16 +2903,8 @@ def index() -> None:
       document.body.classList.remove('ws-input-blocked');
     }
   }
-  function hookSocket() {
-    var sock = window.socket;
-    if (!sock) { setTimeout(hookSocket, 50); return; }
-    if (sock.__offlineGuardHooked) return;
-    sock.__offlineGuardHooked = true;
-    sock.on('disconnect', function() { setOverlay(true); });
-    sock.on('connect',    function() { setOverlay(false); });
-    sock.on('reconnect',  function() { setOverlay(false); });
-  }
-  hookSocket();
+  // Connection state is managed by the calendar-updates websocket.
+  setOverlay(false);
 })();
 </script>
     ''')
@@ -2936,6 +2962,7 @@ def index() -> None:
   const adminGroupGrid   = document.getElementById('admin-group-grid');
   const adminUserGrid   = document.getElementById('admin-user-grid');
   const adminAccessRequestsGrid = document.getElementById('admin-access-requests-grid');
+  const adminPostgresPerformanceGrid = document.getElementById('admin-postgres-performance-grid');
   const accessCatalogGrid = document.getElementById('access-catalog-grid');
   const settingsProfileNameInput = document.getElementById('settings-profile-name-input');
   const settingsProfileContactInput = document.getElementById('settings-profile-contact-input');
@@ -3018,6 +3045,7 @@ def index() -> None:
   let   allCalendars  = [];
   let   currentUser   = null;
   let   adminUsersData = null;
+  let   adminPerformanceData = null;
   let   accessCatalogData = null;
   let   userPasskeys = [];
   let   shareLinksData = [];
@@ -3050,7 +3078,6 @@ def index() -> None:
   let   updatesRefreshInFlight = false;
   let   updatesRefreshQueued = false;
   let   updatesConnectionState = 'connecting';
-  let   niceguiConnected = true;   // tracks NiceGUI socket.io connection state
   let   lastCalendarChangeAt = null;
   let   wsInputBlocked = false;
   const recentLocalChangeIds = new Map();
@@ -3281,17 +3308,13 @@ def index() -> None:
       }
     }
 
-    // Show overlay if either NiceGUI socket.io OR our calendar WS is down
+    // Show overlay based on the single calendar-updates websocket.
     const calConnected = updatesConnectionState === 'connected';
-    const fullyConnected = niceguiConnected && calConnected;
+    const fullyConnected = calConnected;
     setInputBlocked(!fullyConnected);
     if (wsBlockState) {
       if (fullyConnected) {
         wsBlockState.textContent = 'Connected';
-      } else if (!niceguiConnected && !calConnected) {
-        wsBlockState.textContent = 'Server connection lost — trying to reconnect…';
-      } else if (!niceguiConnected) {
-        wsBlockState.textContent = 'Server connection lost — trying to reconnect…';
       } else {
         wsBlockState.textContent = `Sync status: ${updatesConnectionState} — reconnecting…`;
       }
@@ -3352,46 +3375,29 @@ def index() -> None:
   window.setInterval(renderWsStatus, 1000);
   renderWsStatus();
 
-  // ── Hook NiceGUI's socket.io to drive the offline overlay ────────────────
-  // NiceGUI exposes its socket.io socket as window.socket.  When it disconnects
-  // the framework shows a small "Trying to reconnect…" popup bottom-left; we
-  // intercept the same events to show our full-screen overlay instead.
-  // We also prevent any automatic page reloads on reconnection failures.
-  (function hookNiceGuiSocket() {
+  // ── Disable NiceGUI socket.io transport for this page ─────────────────────
+  // The app uses /ws/calendar-updates as its single realtime channel.
+  (function disableNiceGuiSocket() {
     const sock = window.socket;
     if (!sock) {
-      // socket.io may not be initialised yet — retry shortly
-      window.setTimeout(hookNiceGuiSocket, 150);
+      window.setTimeout(disableNiceGuiSocket, 150);
       return;
     }
-    // Avoid attaching twice if NiceGUI recreates its socket
-    if (sock.__labSchedulerHooked) return;
-    sock.__labSchedulerHooked = true;
-
-    sock.on('disconnect', () => {
-      niceguiConnected = false;
-      renderWsStatus();
-    });
-    sock.on('connect', () => {
-      niceguiConnected = true;
-      renderWsStatus();
-    });
-    // socket.io also fires 'reconnect' after the transport-level reconnection
-    sock.on('reconnect', () => {
-      niceguiConnected = true;
-      renderWsStatus();
-    });
-    // Prevent NiceGUI from reloading the page on reconnection failures.
-    // We handle reconnection gracefully with our overlay and calendar WS recovery.
-    sock.on('reconnect_failed', () => {
-      // Don't let NiceGUI's default behavior reload. We manage this via the overlay.
-    });
-    sock.on('error', () => {
-      // Same — let our overlay and WS logic handle it.
-    });
-    sock.on('reconnect_error', () => {
-      // Suppress reconnect errors that might trigger a reload.
-    });
+    try {
+      if (typeof sock.removeAllListeners === 'function') {
+        sock.removeAllListeners('disconnect');
+        sock.removeAllListeners('connect');
+        sock.removeAllListeners('reconnect');
+        sock.removeAllListeners('reconnect_failed');
+        sock.removeAllListeners('reconnect_error');
+        sock.removeAllListeners('error');
+      }
+      if (typeof sock.disconnect === 'function') {
+        sock.disconnect();
+      }
+    } catch {
+      // ignore
+    }
   })();
   (function extractTokenFromUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -5292,6 +5298,8 @@ def index() -> None:
 
     let usersData = null;
     let usersError = null;
+    let performanceData = null;
+    let performanceError = null;
 
     try {
       usersData = await request('/api/admin/users');
@@ -5300,9 +5308,17 @@ def index() -> None:
       console.error('Failed to load admin users:', error);
     }
 
-    adminUsersData = usersData || { users: [], resources: [], resourceGroups: {}, groups: [], accessRequests: [], error: usersError };
+    try {
+      performanceData = await request('/api/admin/postgres-performance');
+    } catch (error) {
+      performanceError = error instanceof Error ? error.message : String(error);
+      console.error('Failed to load postgres performance data:', error);
+    }
 
-    if (usersError) {
+    adminUsersData = usersData || { users: [], resources: [], resourceGroups: {}, groups: [], accessRequests: [], error: usersError };
+    adminPerformanceData = performanceData || { summary: {}, activeQueries: [], topStatements: [], error: performanceError };
+
+    if (usersError || performanceError) {
       showSaveToast('Admin data warning', 'Some admin data could not be loaded. Check console logs.');
     }
 
@@ -5314,16 +5330,29 @@ def index() -> None:
       if (adminGroupGrid) adminGroupGrid.innerHTML = '';
       if (adminUserGrid) adminUserGrid.innerHTML = '';
       if (adminAccessRequestsGrid) adminAccessRequestsGrid.innerHTML = '';
+      if (adminPostgresPerformanceGrid) adminPostgresPerformanceGrid.innerHTML = '';
       return;
     }
 
-    if (!adminGroupGrid || !adminUserGrid || !adminAccessRequestsGrid) {
+    if (!adminGroupGrid || !adminUserGrid || !adminAccessRequestsGrid || !adminPostgresPerformanceGrid) {
       console.error('Admin panel containers are missing from the DOM.');
       return;
     }
     adminGroupGrid.innerHTML = '';
     adminUserGrid.innerHTML = '';
     adminAccessRequestsGrid.innerHTML = '';
+    adminPostgresPerformanceGrid.innerHTML = '';
+
+    const formatDuration = (milliseconds) => {
+      const ms = Number(milliseconds || 0);
+      if (!Number.isFinite(ms) || ms <= 0) return '0s';
+      if (ms < 1000) return `${Math.round(ms)}ms`;
+      const seconds = ms / 1000;
+      if (seconds < 60) return `${seconds.toFixed(1)}s`;
+      const minutes = Math.floor(seconds / 60);
+      const remSeconds = Math.round(seconds % 60);
+      return `${minutes}m ${remSeconds}s`;
+    };
 
     const renderResourceCatalog = (container, resourceList, selectedIds, onAssign) => {
       container.innerHTML = '';
@@ -6222,6 +6251,159 @@ def index() -> None:
         adminAccessRequestsGrid.appendChild(card);
       }
     }
+
+    const perf = adminPerformanceData || {};
+    const summary = perf.summary || {};
+    const activeQueries = Array.isArray(perf.activeQueries) ? perf.activeQueries : [];
+    const topStatements = Array.isArray(perf.topStatements) ? perf.topStatements : [];
+
+    const summaryCard = document.createElement('section');
+    summaryCard.className = 'admin-link-card';
+    const summaryTitle = document.createElement('strong');
+    summaryTitle.textContent = 'Database Summary';
+    const summaryActions = document.createElement('div');
+    summaryActions.className = 'admin-editor-row';
+    summaryActions.style.gridTemplateColumns = '1fr auto';
+    const summarySpacer = document.createElement('div');
+    const refreshPerfButton = document.createElement('button');
+    refreshPerfButton.type = 'button';
+    refreshPerfButton.className = 'admin-save-button';
+    refreshPerfButton.textContent = 'Refresh performance logs';
+    refreshPerfButton.addEventListener('click', async () => {
+      const oldLabel = refreshPerfButton.textContent;
+      refreshPerfButton.disabled = true;
+      refreshPerfButton.textContent = 'Refreshing...';
+      try {
+        await loadAdminData();
+      } finally {
+        refreshPerfButton.disabled = false;
+        refreshPerfButton.textContent = oldLabel;
+      }
+    });
+    summaryActions.append(summarySpacer, refreshPerfButton);
+    const summaryMeta = document.createElement('div');
+    summaryMeta.className = 'admin-helper';
+    const capturedAt = String(perf.capturedAt || '').trim();
+    summaryMeta.textContent = capturedAt ? `Captured at ${capturedAt}` : 'No timestamp available.';
+
+    const summaryGrid = document.createElement('div');
+    summaryGrid.className = 'admin-resource-pills';
+    const summaryItems = [
+      ['Connections', Number(summary.connections || 0)],
+      ['Active sessions', Number(summary.activeSessions || 0)],
+      ['Blocked sessions', Number(summary.blockedSessions || 0)],
+      ['Idle in transaction', Number(summary.idleInTransaction || 0)],
+      ['Max transaction age', formatDuration(summary.maxTransactionAgeMs)],
+      ['Cache hit ratio', `${Number(summary.cacheHitRatioPct || 0).toFixed(2)}%`],
+      ['Commits', Number(summary.xactCommit || 0)],
+      ['Rollbacks', Number(summary.xactRollback || 0)],
+      ['Deadlocks', Number(summary.deadlocks || 0)],
+      ['Temp files', Number(summary.tempFiles || 0)],
+    ];
+    for (const [label, value] of summaryItems) {
+      const pill = document.createElement('span');
+      pill.className = 'admin-pill';
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = `${label}: ${value}`;
+      pill.append(labelSpan);
+      summaryGrid.appendChild(pill);
+    }
+    summaryCard.append(summaryTitle, summaryActions, summaryMeta, summaryGrid);
+    adminPostgresPerformanceGrid.appendChild(summaryCard);
+
+    const activeCard = document.createElement('section');
+    activeCard.className = 'admin-link-card';
+    const activeTitle = document.createElement('strong');
+    activeTitle.textContent = 'Active Query Activity';
+    activeCard.appendChild(activeTitle);
+    if (activeQueries.length === 0) {
+      const emptyActive = document.createElement('div');
+      emptyActive.className = 'admin-helper';
+      emptyActive.textContent = 'No active query rows captured.';
+      activeCard.appendChild(emptyActive);
+    } else {
+      const table = document.createElement('table');
+      table.className = 'admin-performance-table';
+      const header = document.createElement('thead');
+      header.innerHTML = '<tr><th>State</th><th>Wait</th><th>Duration</th><th>User/App</th><th>Query</th></tr>';
+      const body = document.createElement('tbody');
+      for (const row of activeQueries) {
+        const tr = document.createElement('tr');
+
+        const stateTd = document.createElement('td');
+        stateTd.textContent = String(row.state || 'unknown');
+
+        const waitTd = document.createElement('td');
+        const waitType = String(row.waitEventType || '').trim();
+        const waitEvent = String(row.waitEvent || '').trim();
+        waitTd.textContent = waitType || waitEvent ? `${waitType}${waitType && waitEvent ? ':' : ''}${waitEvent}` : 'None';
+
+        const durationTd = document.createElement('td');
+        durationTd.textContent = formatDuration(row.queryDurationMs);
+
+        const userTd = document.createElement('td');
+        userTd.textContent = `${row.user || 'unknown'} / ${row.application || row.backendType || 'unknown'}`;
+
+        const queryTd = document.createElement('td');
+        queryTd.className = 'admin-performance-query';
+        queryTd.textContent = String(row.query || '').trim();
+
+        tr.append(stateTd, waitTd, durationTd, userTd, queryTd);
+        body.appendChild(tr);
+      }
+      table.append(header, body);
+      activeCard.appendChild(table);
+    }
+    adminPostgresPerformanceGrid.appendChild(activeCard);
+
+    const topCard = document.createElement('section');
+    topCard.className = 'admin-link-card';
+    const topTitle = document.createElement('strong');
+    topTitle.textContent = 'Top Statements by Total Execution Time';
+    topCard.appendChild(topTitle);
+    const topError = String(perf.topStatementsError || perf.error || '').trim();
+    if (topError) {
+      const errorNode = document.createElement('div');
+      errorNode.className = 'admin-helper';
+      errorNode.textContent = topError;
+      topCard.appendChild(errorNode);
+    } else if (topStatements.length === 0) {
+      const emptyTop = document.createElement('div');
+      emptyTop.className = 'admin-helper';
+      emptyTop.textContent = 'No statement performance rows available.';
+      topCard.appendChild(emptyTop);
+    } else {
+      const topTable = document.createElement('table');
+      topTable.className = 'admin-performance-table';
+      const topHeader = document.createElement('thead');
+      topHeader.innerHTML = '<tr><th>Calls</th><th>Total</th><th>Mean</th><th>Rows</th><th>Query</th></tr>';
+      const topBody = document.createElement('tbody');
+      for (const row of topStatements) {
+        const tr = document.createElement('tr');
+
+        const callsTd = document.createElement('td');
+        callsTd.textContent = String(Number(row.calls || 0));
+
+        const totalTd = document.createElement('td');
+        totalTd.textContent = formatDuration(Number(row.totalExecMs || 0));
+
+        const meanTd = document.createElement('td');
+        meanTd.textContent = formatDuration(Number(row.meanExecMs || 0));
+
+        const rowsTd = document.createElement('td');
+        rowsTd.textContent = String(Number(row.rows || 0));
+
+        const queryTd = document.createElement('td');
+        queryTd.className = 'admin-performance-query';
+        queryTd.textContent = String(row.query || '').trim();
+
+        tr.append(callsTd, totalTd, meanTd, rowsTd, queryTd);
+        topBody.appendChild(tr);
+      }
+      topTable.append(topHeader, topBody);
+      topCard.appendChild(topTable);
+    }
+    adminPostgresPerformanceGrid.appendChild(topCard);
   }
 
   function linkTokensFromUrl() {
@@ -6561,6 +6743,11 @@ def index() -> None:
       groupHeaderRow.append(groupHeader, groupToggleLabel);
       calendarList.appendChild(groupHeaderRow);
 
+      const groupExpanded = visibleCount > 0;
+      if (!groupExpanded) {
+        continue;
+      }
+
       for (const cal of calendars) {
         const item = document.createElement('div');
         item.className = 'sidebar-cal-item';
@@ -6580,15 +6767,12 @@ def index() -> None:
           renderSidebar();
         });
 
-        const dot = document.createElement('span');
-        dot.className        = 'cal-dot';
-        dot.style.background = cal.color;
-
         const name = document.createElement('span');
         name.className   = 'cal-name';
         name.textContent = cal.name;
+        name.style.color = cal.color || '#cbd5e1';
 
-        meta.append(cb, dot, name);
+        meta.append(cb, name);
 
         const infoButton = document.createElement('button');
         infoButton.type = 'button';
@@ -6721,6 +6905,38 @@ def index() -> None:
   }
 
   // ── FullCalendar event source ────────────────────────────────────────────
+  function buildWorkingHourHighlights(rangeStart, rangeEnd) {
+    const highlights = [];
+    if (!(rangeStart instanceof Date) || !(rangeEnd instanceof Date)) {
+      return highlights;
+    }
+
+    const cursor = new Date(rangeStart);
+    cursor.setHours(0, 0, 0, 0);
+
+    const end = new Date(rangeEnd);
+    end.setHours(0, 0, 0, 0);
+
+    while (cursor < end) {
+      const day = cursor.getDay();
+      if (day >= 1 && day <= 5) {
+        const start = new Date(cursor);
+        start.setHours(9, 0, 0, 0);
+        const finish = new Date(cursor);
+        finish.setHours(17, 0, 0, 0);
+        highlights.push({
+          start: start.toISOString(),
+          end: finish.toISOString(),
+          display: 'background',
+          classNames: ['working-hours-highlight'],
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return highlights;
+  }
+
   async function loadEvents(info, success, failure) {
     try {
       const q = new URLSearchParams({
@@ -6736,7 +6952,8 @@ def index() -> None:
           return calendarIds.some(cid => !hiddenCals.has(cid));
         });
       }
-      success(events);
+      const highlights = buildWorkingHourHighlights(info.start, info.end);
+      success([...highlights, ...events]);
       updateDialogCalendarAvailability();
     } catch (err) { failure(err); }
   }
@@ -6777,8 +6994,49 @@ def index() -> None:
   }
 
   // ── FullCalendar initialisation ───────────────────────────────────────────
+  function formatDdMm(date) {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${day}/${month}`;
+  }
+
+  function updateCalendarToolbarTitle(viewType, start, end) {
+    const titleEl = document.querySelector('.fc-toolbar-title');
+    if (!titleEl || !(start instanceof Date) || !(end instanceof Date)) {
+      return;
+    }
+
+    if (viewType === 'timeGridDay') {
+      titleEl.textContent = formatDdMm(start);
+      return;
+    }
+
+    if (viewType === 'timeGridWeek' || viewType === 'listWeek') {
+      const rangeEnd = new Date(end);
+      rangeEnd.setDate(rangeEnd.getDate() - 1);
+      titleEl.textContent = `${formatDdMm(start)} - ${formatDdMm(rangeEnd)}`;
+      return;
+    }
+
+    if (viewType === 'dayGridMonth') {
+      const monthStart = new Date(start.getFullYear(), start.getMonth(), 1);
+      const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+      titleEl.textContent = `${formatDdMm(monthStart)} - ${formatDdMm(monthEnd)}`;
+    }
+  }
+
   const fcCalendar = new FullCalendar.Calendar(mountNode, {
     initialView: 'timeGridWeek',
+    firstDay: 1,
+    weekends: true,
+    slotMinTime: '00:00:00',
+    slotMaxTime: '24:00:00',
+    businessHours: {
+      daysOfWeek: [1, 2, 3, 4, 5],
+      startTime: '09:00',
+      endTime: '17:00',
+    },
+    dayHeaderFormat: { weekday: 'short', day: '2-digit', month: '2-digit' },
     height: 'auto',
     nowIndicator: true,
     editable: true,
@@ -6788,6 +7046,9 @@ def index() -> None:
       left:   'prev,next today',
       center: 'title',
       right:  'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+    },
+    datesSet: function(info) {
+      updateCalendarToolbarTitle(info.view.type, info.start, info.end);
     },
     events: loadEvents,
     select: function(sel) {

@@ -15,6 +15,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 DEFAULT_BACKUP_DIR = PROJECT_ROOT / "backups"
+MIN_BACKUP_SPACING_HOURS = 24
 
 
 def parse_env_file(env_path: Path) -> dict[str, str]:
@@ -93,6 +94,41 @@ def prune_old_backups(backup_dir: Path, retention_days: int) -> int:
     return deleted
 
 
+def list_backup_files_newest_first(backup_dir: Path) -> list[Path]:
+    return sorted(
+        backup_dir.glob("*.zip"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def get_latest_backup_time(backup_dir: Path) -> datetime | None:
+    backups = list_backup_files_newest_first(backup_dir)
+    if not backups:
+        return None
+    return datetime.fromtimestamp(backups[0].stat().st_mtime, tz=timezone.utc)
+
+
+def prune_dense_backups(backup_dir: Path, min_spacing_hours: float) -> int:
+    backups = list_backup_files_newest_first(backup_dir)
+    if len(backups) <= 1:
+        return 0
+
+    spacing_seconds = min_spacing_hours * 3600.0
+    kept_timestamps: list[float] = []
+    deleted = 0
+
+    for backup_file in backups:
+        modified_ts = backup_file.stat().st_mtime
+        if any((kept_ts - modified_ts) < spacing_seconds for kept_ts in kept_timestamps):
+            backup_file.unlink(missing_ok=True)
+            deleted += 1
+            continue
+        kept_timestamps.append(modified_ts)
+
+    return deleted
+
+
 def perform_backup(
     backup_dir: Path,
     db_host: str,
@@ -101,10 +137,27 @@ def perform_backup(
     db_name: str,
     db_password: str,
     retention_days: int,
-) -> Path:
+    min_spacing_hours: float = MIN_BACKUP_SPACING_HOURS,
+) -> Path | None:
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    latest_backup_time = get_latest_backup_time(backup_dir)
+    now = datetime.now(timezone.utc)
+    if latest_backup_time is not None:
+        elapsed = now - latest_backup_time
+        if elapsed < timedelta(hours=min_spacing_hours):
+            dense_deleted_count = prune_dense_backups(backup_dir=backup_dir, min_spacing_hours=min_spacing_hours)
+            old_deleted_count = prune_old_backups(backup_dir=backup_dir, retention_days=retention_days)
+            print(
+                f"[{now.isoformat()}] Backup skipped: most recent backup is {elapsed} old"
+                f" (< {min_spacing_hours:g}h)"
+                f" | dense backups removed: {dense_deleted_count}"
+                f" | old backups removed: {old_deleted_count}",
+                flush=True,
+            )
+            return None
+
+    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
     sql_filename = f"{db_name}_{timestamp}.sql"
     zip_filename = f"{db_name}_{timestamp}.zip"
     zip_path = backup_dir / zip_filename
@@ -121,10 +174,12 @@ def perform_backup(
         )
         compress_sql_dump(sql_path=sql_path, zip_path=zip_path)
 
-    deleted_count = prune_old_backups(backup_dir=backup_dir, retention_days=retention_days)
+    dense_deleted_count = prune_dense_backups(backup_dir=backup_dir, min_spacing_hours=min_spacing_hours)
+    old_deleted_count = prune_old_backups(backup_dir=backup_dir, retention_days=retention_days)
     print(
         f"[{datetime.now(timezone.utc).isoformat()}] Backup complete: {zip_path}"
-        f" | old backups removed: {deleted_count}",
+        f" | dense backups removed: {dense_deleted_count}"
+        f" | old backups removed: {old_deleted_count}",
         flush=True,
     )
     return zip_path
