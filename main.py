@@ -4,14 +4,25 @@ Application entry point.
 Imports register all route handlers and the NiceGUI page, then starts the server.
 """
 import asyncio
+import sys
 from sqlalchemy.exc import SQLAlchemyError
 
-from fastapi import Request
-from fastapi.responses import Response
-from fastapi.middleware.gzip import GZipMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-from nicegui import app, ui
-from fastapi.staticfiles import StaticFiles
+try:
+    from fastapi import Request
+    from fastapi.responses import Response
+    from fastapi.middleware.gzip import GZipMiddleware
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    from nicegui import app, ui
+    from fastapi.staticfiles import StaticFiles
+except ModuleNotFoundError as exc:
+    missing_module = str(getattr(exc, 'name', '') or 'required dependency')
+    print(
+        f'[startup] Missing dependency: {missing_module}. '
+        f'Install dependencies with "pip install -r requirements.txt".',
+        file=sys.stderr,
+        flush=True,
+    )
+    raise
 from media_assets import STATIC_ROOT, ensure_static_asset_dirs
 
 # ── Register routes ───────────────────────────────────────────────────────────

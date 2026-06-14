@@ -50,6 +50,11 @@ if IS_PRODUCTION:
     if parsed_base_url.scheme != 'https':
         raise RuntimeError('APP_BASE_URL must use https in production.')
 
+if not IS_PRODUCTION:
+    for host in ('localhost', '127.0.0.1', '::1'):
+        if host not in APP_ALLOWED_HOSTS:
+            APP_ALLOWED_HOSTS.append(host)
+
 if not APP_ALLOWED_HOSTS:
     raise RuntimeError('APP_ALLOWED_HOSTS must include at least one host value.')
 

@@ -1135,6 +1135,14 @@ def index() -> None:
             overflow: hidden;
             isolation: isolate;
           }
+          .landing-screen.is-signin-modal::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.72);
+            backdrop-filter: blur(2px);
+            z-index: 8;
+          }
           #landing-screen {
             left: 50% !important;
             top: 0 !important;
@@ -1172,6 +1180,17 @@ def index() -> None:
             padding: clamp(22px, 4vw, 34px);
             position: relative;
             z-index: 2;
+          }
+          .landing-screen.is-signin-modal .landing-card {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(760px, calc(100vw - 32px));
+            max-height: calc(100vh - 32px);
+            overflow: auto;
+            z-index: 9;
+            box-shadow: 0 40px 90px rgba(2, 8, 16, 0.55);
           }
           .landing-content {
             width: 100%;
@@ -1237,6 +1256,19 @@ def index() -> None:
             padding-top: 18px;
             border-top: 1px solid rgba(255,255,255,0.1);
             display: grid;
+            gap: 12px;
+          }
+          .landing-auth-groups {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+          }
+          .landing-auth-block {
+            background: rgba(15, 23, 42, 0.58);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            display: grid;
             gap: 10px;
           }
           .landing-auth-title {
@@ -1266,13 +1298,30 @@ def index() -> None:
           .landing-auth .landing-input {
             max-width: none;
           }
-          .landing-signup-note {
-            margin-top: 2px;
-            text-align: center;
+          .landing-auth-close {
+            display: none;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: rgba(15, 23, 42, 0.7);
+            color: #e2e8f0;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            cursor: pointer;
+            justify-self: end;
           }
-          .landing-signup-note a {
-            color: #93c5fd;
-            font-size: 0.92rem;
+          .landing-auth-close:hover {
+            background: rgba(30, 41, 59, 0.92);
+          }
+          .landing-screen.is-signin-modal .landing-auth-close {
+            display: inline-flex;
+          }
+          .landing-auth-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.68);
+            backdrop-filter: blur(2px);
+            z-index: 7;
           }
           .ws-status {
             margin: 10px 12px 14px;
@@ -1744,6 +1793,11 @@ def index() -> None:
             gap: 18px;
           }
           .access-panel[hidden] { display: none; }
+          .upcoming-panel {
+            display: grid;
+            gap: 18px;
+          }
+          .upcoming-panel[hidden] { display: none; }
           .admin-card {
             background: #fff;
             border-radius: 14px;
@@ -2101,6 +2155,161 @@ def index() -> None:
             border-color: #86efac;
             color: #166534;
             cursor: default;
+          }
+          .admin-order-list {
+            display: grid;
+            gap: 8px;
+          }
+          .admin-order-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: center;
+            border: 1px solid #dbe4f0;
+            border-radius: 10px;
+            background: #fff;
+            padding: 8px 10px;
+          }
+          .admin-order-label {
+            font-size: 0.86rem;
+            font-weight: 650;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .admin-order-swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            flex-shrink: 0;
+            box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.18);
+          }
+          .admin-order-controls {
+            display: inline-flex;
+            gap: 6px;
+          }
+          .admin-vacuum-list {
+            display: grid;
+            gap: 8px;
+          }
+          .admin-vacuum-row {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) repeat(3, auto) auto;
+            gap: 8px;
+            align-items: center;
+            border: 1px solid #dbe4f0;
+            border-radius: 10px;
+            background: #fff;
+            padding: 8px 10px;
+          }
+          .admin-vacuum-label {
+            display: grid;
+            gap: 2px;
+            min-width: 0;
+          }
+          .admin-vacuum-table-name {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: #0f172a;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .admin-vacuum-table-meta {
+            font-size: 0.78rem;
+            color: #64748b;
+          }
+          .admin-vacuum-stat {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #334155;
+            white-space: nowrap;
+          }
+          .upcoming-bookings-list {
+            display: grid;
+            gap: 10px;
+            margin-top: 10px;
+          }
+          .upcoming-booking-row {
+            border: 1px solid #dbe4f0;
+            border-radius: 12px;
+            background: #f8fafc;
+            padding: 12px;
+            display: grid;
+            gap: 6px;
+          }
+          .upcoming-booking-title {
+            margin: 0;
+            color: #0f172a;
+            font-size: 0.96rem;
+            font-weight: 700;
+          }
+          .upcoming-booking-meta {
+            margin: 0;
+            color: #334155;
+            font-size: 0.86rem;
+          }
+          .upcoming-booking-empty {
+            border: 1px dashed #cbd5e1;
+            border-radius: 12px;
+            background: #f8fafc;
+            color: #475569;
+            font-size: 0.92rem;
+            padding: 12px;
+          }
+          .calendar-editor-modal {
+            width: min(1180px, calc(100vw - 32px));
+            max-height: calc(100vh - 32px);
+            border: none;
+            border-radius: 16px;
+            padding: 0;
+            overflow: hidden;
+            box-shadow: 0 32px 80px rgba(2, 8, 23, 0.42);
+            background: #020617;
+          }
+          .calendar-editor-modal::backdrop {
+            background: rgba(2, 6, 23, 0.68);
+            backdrop-filter: blur(2px);
+          }
+          .calendar-editor-modal-shell {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            min-height: min(760px, calc(100vh - 32px));
+            background: #020617;
+          }
+          .calendar-editor-modal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 14px;
+            background: linear-gradient(135deg, #0f172a 0%, #082f49 100%);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+          }
+          .calendar-editor-modal-title {
+            margin: 0;
+            color: #e2e8f0;
+            font-size: 0.94rem;
+            font-weight: 700;
+          }
+          .calendar-editor-modal-close {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(15, 23, 42, 0.85);
+            color: #e2e8f0;
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            cursor: pointer;
+          }
+          .calendar-editor-modal-close:hover {
+            background: rgba(30, 41, 59, 0.95);
+          }
+          .calendar-editor-modal-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: #020617;
           }
           .admin-performance-table {
             width: 100%;
@@ -2485,10 +2694,50 @@ def index() -> None:
             font-size: 0.94rem;
           }
           @media (max-width:640px) {
+            .landing-screen {
+              align-items: flex-start;
+              overflow-y: auto;
+              padding: 12px 0;
+            }
+            .landing-card {
+              width: calc(100% - 16px);
+              border-radius: 18px;
+              padding: 16px;
+              margin: 0 auto;
+            }
+            .landing-screen.is-signin-modal .landing-card {
+              width: calc(100vw - 16px);
+              max-height: calc(100dvh - 16px);
+              top: 8px;
+              transform: translateX(-50%);
+            }
+            .landing-title { font-size: clamp(1.35rem, 7vw, 1.85rem); }
+            .landing-subtitle { font-size: 0.92rem; line-height: 1.35; }
             .landing-form { grid-template-columns: 1fr; }
             .landing-auth-row { grid-template-columns: 1fr; }
+            .landing-submit { padding: 11px 12px; }
             .event-dialog-row { grid-template-columns:1fr; }
             .profile-card { padding: 16px; }
+          }
+
+          @media (max-width:420px) {
+            .landing-screen {
+              padding: 8px 0;
+            }
+            .landing-card {
+              width: calc(100% - 12px);
+              border-radius: 14px;
+              padding: 12px;
+            }
+            .landing-screen.is-signin-modal .landing-card {
+              width: calc(100vw - 12px);
+              max-height: calc(100dvh - 12px);
+              top: 6px;
+            }
+            .landing-title { font-size: clamp(1.2rem, 7.2vw, 1.55rem); }
+            .landing-subtitle { font-size: 0.88rem; }
+            .landing-auth { margin-top: 14px; padding-top: 12px; }
+            .landing-auth-block { padding: 10px; gap: 8px; }
           }
         </style>
     ''')
@@ -2503,40 +2752,64 @@ def index() -> None:
           <section class="landing-card">
             <div class="card-sheen"></div>
             <div class="landing-content">
-              <h1 class="landing-title">LabScheduling Dashboard</h1>
+              <h1 class="landing-title">Lab Scheduling Dashboard</h1>
               <p class="landing-subtitle">Enter your access token to open the shared lab scheduling view.</p>
+              <button id="landing-auth-close" class="landing-auth-close" type="button">Close sign-in</button>
 
             <div class="landing-form">
-                <input id="token-input" class="landing-input" type="text" placeholder="Enter access token (for example: science)" />
+                <input id="token-input" class="landing-input" type="text" placeholder="Enter access token (for example: amber-fox-river-candle)" />
                 <button id="token-submit" class="landing-submit" type="button">Open Schedule</button>
               </div>
               <p id="token-help" class="landing-help"></p>
 
               <div class="landing-auth">
-                <p class="landing-auth-title">Or Sign In:</p>
-                <div class="landing-auth-row">
-                  <button id="google-login-btn" class="landing-submit landing-submit--auth" type="button">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="12" cy="12" r="10"></circle>
-                    </svg>
-                    Sign in with Google
-                  </button>
-                  <button id="passkey-login-btn" class="landing-submit landing-submit--auth" type="button">
-                    <span aria-hidden="true">&#128273;</span>
-                    Login with Passkey
-                  </button>
-                </div>
-                <div class="landing-auth-row-single">
-                  <input id="email-login-input" class="landing-input" type="email" maxlength="254" placeholder="Email login link" />
-                  <button id="email-login-btn" class="landing-submit landing-submit--auth" type="button">Send Email Login Link</button>
-                </div>
-                <div class="landing-signup-note">
-                  <a href="/signup">Need an account? Sign up</a>
+                <div class="landing-auth-groups">
+                  <section class="landing-auth-block">
+                    <p class="landing-auth-title">Or Sign In:</p>
+                    <div class="landing-auth-row">
+                      <button id="google-login-btn" class="landing-submit landing-submit--auth" type="button">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                        </svg>
+                        Sign in with Google
+                      </button>
+                      <button id="passkey-login-btn" class="landing-submit landing-submit--auth" type="button">
+                        <span aria-hidden="true">&#128273;</span>
+                        Login with Passkey
+                      </button>
+                    </div>
+                    <div class="landing-auth-row-single">
+                      <input id="email-login-input" class="landing-input" type="email" maxlength="254" placeholder="Email for a diceword sign-in link" />
+                      <button id="email-login-btn" class="landing-submit landing-submit--auth" type="button">Send Diceword Sign-In Link</button>
+                    </div>
+                  </section>
+
+                  <section id="landing-sign-up" class="landing-auth-block">
+                    <p class="landing-auth-title">Sign Up:</p>
+                    <div class="landing-auth-row">
+                      <button id="google-signup-btn" class="landing-submit landing-submit--auth" type="button">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                        </svg>
+                        Sign up with Google
+                      </button>
+                      <button id="passkey-signup-btn" class="landing-submit landing-submit--auth" type="button">
+                        <span aria-hidden="true">&#128273;</span>
+                        Sign up with Passkey
+                      </button>
+                    </div>
+                    <div class="landing-auth-row-single">
+                      <input id="email-signup-input" class="landing-input" type="email" maxlength="254" placeholder="Email for a sign-up link" />
+                      <button id="email-signup-btn" class="landing-submit landing-submit--auth" type="button">Send Sign-Up Link</button>
+                    </div>
+                  </section>
                 </div>
               </div>
             </div>
           </section>
         </div>
+
+        <div id="landing-auth-backdrop" class="landing-auth-backdrop" hidden></div>
 
         <div id="profile-onboarding-screen" class="profile-screen" aria-live="polite">
           <section class="profile-card">
@@ -2568,7 +2841,7 @@ def index() -> None:
 
           <!-- Left sidebar -->
           <nav class="sidebar">
-            <div id="sidebar-logo" class="sidebar-logo">&#128300; Lab Scheduler</div>
+            <div id="sidebar-logo" class="sidebar-logo">&#128300; Lab Scheduling</div>
             <div id="calendar-nav-item" class="sidebar-nav-item active">
               <span class="sidebar-nav-icon">&#128197;</span>
               <span>Calendars</span>
@@ -2579,6 +2852,10 @@ def index() -> None:
               <span class="sidebar-nav-icon">&#128272;</span>
               <span>User Settings</span>
             </div>
+            <div id="upcoming-nav-item" class="sidebar-nav-item" style="display:none;">
+              <span class="sidebar-nav-icon">&#9200;</span>
+              <span>Upcoming Bookings</span>
+            </div>
             <div id="admin-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#9881;</span>
               <span>Admin</span>
@@ -2586,10 +2863,6 @@ def index() -> None:
             <div id="logout-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#128682;</span>
               <span id="logout-nav-label">Logout</span>
-            </div>
-            <div id="signup-nav-item" class="sidebar-nav-item" style="display:none;">
-              <span class="sidebar-nav-icon">&#10133;</span>
-              <span>Sign up</span>
             </div>
             <div id="share-nav-item" class="sidebar-nav-item" style="display:none;">
               <span class="sidebar-nav-icon">&#128257;</span>
@@ -2654,6 +2927,13 @@ def index() -> None:
                 <div id="passkey-list" class="admin-resource-pills" style="margin-top: 8px;"></div>
               </section>
             </div>
+            <div id="upcoming-panel" class="upcoming-panel" hidden>
+              <section class="admin-card">
+                <h2>Upcoming Bookings</h2>
+                <p>Your upcoming bookings where the booking user name matches your current profile name.</p>
+                <div id="upcoming-bookings-grid" class="upcoming-bookings-list"></div>
+              </section>
+            </div>
             <div id="admin-panel" class="admin-panel" hidden>
               <section class="admin-card">
                 <h2>Group Manager</h2>
@@ -2706,6 +2986,16 @@ def index() -> None:
               <button id="override-cancel" class="override-btn override-btn-cancel" type="button">Cancel</button>
               <button id="override-confirm" class="override-btn override-btn-confirm" type="button">Override</button>
             </div>
+          </div>
+        </dialog>
+
+        <dialog id="calendar-editor-modal" class="calendar-editor-modal" aria-label="Calendar editor" aria-modal="true">
+          <div class="calendar-editor-modal-shell">
+            <div class="calendar-editor-modal-head">
+              <p id="calendar-editor-modal-title" class="calendar-editor-modal-title">Calendar Editor</p>
+              <button id="calendar-editor-modal-close" class="calendar-editor-modal-close" type="button">Close</button>
+            </div>
+            <iframe id="calendar-editor-modal-frame" class="calendar-editor-modal-frame" title="Calendar editor"></iframe>
           </div>
         </dialog>
 
@@ -2951,19 +3241,21 @@ def index() -> None:
   const sidebarLogo     = document.getElementById('sidebar-logo');
   const calendarNavItem = document.getElementById('calendar-nav-item');
   const accessNavItem   = document.getElementById('access-nav-item');
+  const upcomingNavItem = document.getElementById('upcoming-nav-item');
   const adminNavItem    = document.getElementById('admin-nav-item');
   const logoutNavItem   = document.getElementById('logout-nav-item');
-  const signupNavItem   = document.getElementById('signup-nav-item');
   const shareNavItem    = document.getElementById('share-nav-item');
   const tokenActionNavItem = document.getElementById('token-action-nav-item');
   const calendarView    = document.getElementById('calendar-view');
   const accessPanel     = document.getElementById('access-panel');
+  const upcomingPanel   = document.getElementById('upcoming-panel');
   const adminPanel      = document.getElementById('admin-panel');
   const adminGroupGrid   = document.getElementById('admin-group-grid');
   const adminUserGrid   = document.getElementById('admin-user-grid');
   const adminAccessRequestsGrid = document.getElementById('admin-access-requests-grid');
   const adminPostgresPerformanceGrid = document.getElementById('admin-postgres-performance-grid');
   const accessCatalogGrid = document.getElementById('access-catalog-grid');
+  const upcomingBookingsGrid = document.getElementById('upcoming-bookings-grid');
   const settingsProfileNameInput = document.getElementById('settings-profile-name-input');
   const settingsProfileContactInput = document.getElementById('settings-profile-contact-input');
   const settingsProfileLabGroupInput = document.getElementById('settings-profile-lab-group-input');
@@ -2979,6 +3271,7 @@ def index() -> None:
   const eventCalendars  = document.getElementById('event-calendars');
   const appShell        = document.getElementById('app-shell');
   const landingScreen   = document.getElementById('landing-screen');
+  const landingAuthBackdrop = document.getElementById('landing-auth-backdrop');
   const profileOnboardingScreen = document.getElementById('profile-onboarding-screen');
   const profileOnboardingForm = document.getElementById('profile-onboarding-form');
   const profileOnboardingName = document.getElementById('profile-onboarding-name');
@@ -3000,12 +3293,17 @@ def index() -> None:
   const saveToastTitle = document.getElementById('save-toast-title');
   const saveToastSub   = document.getElementById('save-toast-sub');
   const saveToastClose = document.getElementById('save-toast-close');
+  const landingAuthCloseButton = document.getElementById('landing-auth-close');
   let   saveToastTimer = null;
   const wsBlockOverlay  = document.getElementById('ws-block-overlay');
   const wsBlockState    = document.getElementById('ws-block-state');
   const overrideBlockOverlay = document.getElementById('override-block-overlay');
   const overrideCancelButton = document.getElementById('override-cancel');
   const overrideConfirmButton = document.getElementById('override-confirm');
+  const calendarEditorModal = document.getElementById('calendar-editor-modal');
+  const calendarEditorModalTitle = document.getElementById('calendar-editor-modal-title');
+  const calendarEditorModalClose = document.getElementById('calendar-editor-modal-close');
+  const calendarEditorModalFrame = document.getElementById('calendar-editor-modal-frame');
   const overlapDialog   = document.getElementById('overlap-dialog');
   const overlapTitle    = document.getElementById('overlap-dialog-title');
   const overlapMessage  = document.getElementById('overlap-dialog-message');
@@ -3047,6 +3345,7 @@ def index() -> None:
   let   adminUsersData = null;
   let   adminPerformanceData = null;
   let   accessCatalogData = null;
+  let   upcomingBookingsData = null;
   let   userPasskeys = [];
   let   shareLinksData = [];
   let   currentView   = 'calendar';
@@ -3159,6 +3458,52 @@ def index() -> None:
 
   function showErrorToast(title, sub, host = document.body) {
     showSaveToast(title || 'Error', sub || '', true, host);
+  }
+
+  function openCalendarEditorModal(calendarId, calendarLabel) {
+    const normalizedId = String(calendarId || '').trim();
+    if (!normalizedId) {
+      return;
+    }
+    if (!calendarEditorModal || !calendarEditorModalFrame || !calendarEditorModalTitle) {
+      window.location.href = `/calendar-edit/${encodeURIComponent(normalizedId)}`;
+      return;
+    }
+    const titleLabel = String(calendarLabel || '').trim() || normalizedId;
+    calendarEditorModalTitle.textContent = `Calendar Editor: ${titleLabel}`;
+    calendarEditorModalFrame.src = `/calendar-edit/${encodeURIComponent(normalizedId)}`;
+    if (!calendarEditorModal.open) {
+      calendarEditorModal.showModal();
+    }
+  }
+
+  function closeCalendarEditorModal() {
+    if (!calendarEditorModal) return;
+    if (calendarEditorModal.open) {
+      calendarEditorModal.close();
+    }
+    if (calendarEditorModalFrame) {
+      calendarEditorModalFrame.src = 'about:blank';
+    }
+    if (isAdminUser()) {
+      loadAdminData().catch((error) => {
+        console.warn('Unable to refresh admin data after closing calendar editor:', error);
+      });
+    }
+  }
+
+  if (calendarEditorModalClose) {
+    calendarEditorModalClose.addEventListener('click', closeCalendarEditorModal);
+  }
+  if (calendarEditorModal) {
+    calendarEditorModal.addEventListener('click', (event) => {
+      if (event.target === calendarEditorModal) {
+        closeCalendarEditorModal();
+      }
+    });
+    calendarEditorModal.addEventListener('cancel', () => {
+      closeCalendarEditorModal();
+    });
   }
 
   if (saveToastClose) {
@@ -3311,9 +3656,12 @@ def index() -> None:
     // Show overlay based on the single calendar-updates websocket.
     const calConnected = updatesConnectionState === 'connected';
     const fullyConnected = calConnected;
-    setInputBlocked(!fullyConnected);
+    const appSessionActive = hasValidToken && appShell && appShell.style.display !== 'none';
+    setInputBlocked(appSessionActive && !fullyConnected);
     if (wsBlockState) {
-      if (fullyConnected) {
+      if (!appSessionActive) {
+        wsBlockState.textContent = 'Sync status: idle';
+      } else if (fullyConnected) {
         wsBlockState.textContent = 'Connected';
       } else {
         wsBlockState.textContent = `Sync status: ${updatesConnectionState} — reconnecting…`;
@@ -3841,7 +4189,7 @@ def index() -> None:
   }
 
   async function refreshFromRemoteUpdate() {
-    if (!hasValidToken) return;
+    if (!hasValidToken || !currentToken) return;
     if (updatesRefreshInFlight) {
       updatesRefreshQueued = true;
       return;
@@ -3858,6 +4206,9 @@ def index() -> None:
       tokenAllowedCalendars = new Set((cals || []).map(cal => cal.id));
       renderSidebar();
       renderAccessCatalog();
+      if (currentView === 'upcoming') {
+        void loadUpcomingBookings();
+      }
       if (fcCalendar) {
         fcCalendar.refetchEvents();
       }
@@ -3873,6 +4224,9 @@ def index() -> None:
   }
 
   function connectCalendarUpdatesSocket() {
+    if (!hasValidToken || !currentToken) {
+      return;
+    }
     if (updatesSocket && (
       updatesSocket.readyState === WebSocket.OPEN ||
       updatesSocket.readyState === WebSocket.CONNECTING
@@ -3927,6 +4281,7 @@ def index() -> None:
       if (updatesSocket === socket) updatesSocket = null;
       updatesConnectionState = 'disconnected';
       renderWsStatus();
+      if (!hasValidToken || !currentToken) return;
       if (updatesReconnectTimer) return;
       const delay = updatesReconnectDelay;
       updatesReconnectDelay = Math.min(5000, updatesReconnectDelay * 2);
@@ -4745,10 +5100,14 @@ def index() -> None:
     currentView = view;
     const showCalendar = view === 'calendar';
     const showAccess = view === 'access';
+    const showUpcoming = view === 'upcoming';
     const showAdmin = view === 'admin' && isAdminUser();
     calendarView.hidden = !showCalendar;
     if (accessPanel) {
       accessPanel.hidden = !showAccess;
+    }
+    if (upcomingPanel) {
+      upcomingPanel.hidden = !showUpcoming;
     }
     adminPanel.hidden = !showAdmin;
     if (showAccess && !accessCatalogData) {
@@ -4777,11 +5136,17 @@ def index() -> None:
         });
       void loadPasskeys();
     }
+    if (showUpcoming) {
+      void loadUpcomingBookings();
+    }
     if (adminNavItem) {
       adminNavItem.classList.toggle('active', showAdmin);
     }
     if (accessNavItem) {
       accessNavItem.classList.toggle('active', showAccess);
+    }
+    if (upcomingNavItem) {
+      upcomingNavItem.classList.toggle('active', showUpcoming);
     }
     if (calendarNavItem) {
       calendarNavItem.classList.toggle('active', showCalendar);
@@ -4872,6 +5237,92 @@ def index() -> None:
       console.warn('Failed to load passkeys:', error);
     }
     renderPasskeyList();
+  }
+
+  function formatUpcomingDate(value, isAllDay) {
+    if (!value) return 'Unknown time';
+    const parsed = new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) return 'Unknown time';
+    if (isAllDay) {
+      return parsed.toLocaleDateString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+      });
+    }
+    return parsed.toLocaleString(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  }
+
+  function renderUpcomingBookings() {
+    if (!upcomingBookingsGrid) return;
+    upcomingBookingsGrid.innerHTML = '';
+
+    const rows = Array.isArray(upcomingBookingsData) ? upcomingBookingsData : [];
+    if (rows.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'upcoming-booking-empty';
+      empty.textContent = 'No upcoming bookings match your profile name.';
+      upcomingBookingsGrid.appendChild(empty);
+      return;
+    }
+
+    for (const booking of rows) {
+      const card = document.createElement('article');
+      card.className = 'upcoming-booking-row';
+
+      const title = document.createElement('p');
+      title.className = 'upcoming-booking-title';
+      title.textContent = String(booking.eventTitle || booking.title || 'Booking');
+
+      const timeMeta = document.createElement('p');
+      timeMeta.className = 'upcoming-booking-meta';
+      const startLabel = formatUpcomingDate(booking.start, booking.allDay);
+      const endLabel = booking.end ? formatUpcomingDate(booking.end, booking.allDay) : '';
+      timeMeta.textContent = endLabel ? `${startLabel} -> ${endLabel}` : startLabel;
+
+      const calMeta = document.createElement('p');
+      calMeta.className = 'upcoming-booking-meta';
+      const calendarNames = Array.isArray(booking.calendarNames)
+        ? booking.calendarNames.map((value) => String(value || '').trim()).filter(Boolean)
+        : [];
+      calMeta.textContent = `Calendars: ${calendarNames.length > 0 ? calendarNames.join(', ') : 'Unknown'}`;
+
+      const detailMeta = document.createElement('p');
+      detailMeta.className = 'upcoming-booking-meta';
+      const contact = String(booking.contact || '').trim();
+      detailMeta.textContent = contact ? `Contact: ${contact}` : 'No contact set';
+
+      card.append(title, timeMeta, calMeta, detailMeta);
+      upcomingBookingsGrid.appendChild(card);
+    }
+  }
+
+  async function loadUpcomingBookings() {
+    if (!upcomingBookingsGrid) return;
+    if (!hasValidToken || isServiceAccountUser()) {
+      upcomingBookingsData = [];
+      renderUpcomingBookings();
+      return;
+    }
+
+    upcomingBookingsGrid.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'upcoming-booking-empty';
+    loading.textContent = 'Loading upcoming bookings...';
+    upcomingBookingsGrid.appendChild(loading);
+
+    try {
+      const response = await request('/api/users/me/upcoming-bookings');
+      upcomingBookingsData = Array.isArray(response?.bookings) ? response.bookings : [];
+      renderUpcomingBookings();
+    } catch (error) {
+      upcomingBookingsData = [];
+      upcomingBookingsGrid.innerHTML = '';
+      const failed = document.createElement('div');
+      failed.className = 'upcoming-booking-empty';
+      failed.textContent = error instanceof Error ? error.message : String(error);
+      upcomingBookingsGrid.appendChild(failed);
+    }
   }
 
   function renderOwnLoginLink(value = '') {
@@ -5049,12 +5500,33 @@ def index() -> None:
     }
   }
 
-  async function requestAccess(targetType, targetId, label) {
+  async function requestAccess(targetType, targetId, label, triggerButton = null) {
+    const previousState = triggerButton ? String(triggerButton.dataset.state || '') : '';
+    const previousLabel = triggerButton ? String(triggerButton.textContent || '') : '';
+
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.dataset.state = 'pending';
+      triggerButton.textContent = accessButtonLabelForState('pending');
+    }
+
+    // Confirm immediately so the user gets feedback even if the API is slow.
+    showSaveToast('Request sent', `Submitting access request for ${label}...`);
+
     try {
       await request('/api/access-requests', 'POST', { targetType, targetId });
       showSaveToast('Access requested', `Requested access to ${label}.`);
-      await loadAccessCatalog();
+      void loadAccessCatalog();
     } catch (error) {
+      if (triggerButton) {
+        triggerButton.disabled = false;
+        if (previousState) {
+          triggerButton.dataset.state = previousState;
+        } else {
+          delete triggerButton.dataset.state;
+        }
+        triggerButton.textContent = previousLabel || accessButtonLabelForState(previousState || 'available');
+      }
       showErrorToast('Request failed', error instanceof Error ? error.message : String(error), accessPanel || document.body);
     }
   }
@@ -5134,7 +5606,7 @@ def index() -> None:
             ? 'Show Group'
             : accessButtonLabelForState(groupState);
       if (groupState === 'available') {
-        groupButton.onclick = () => requestAccess('group', group.name, `the ${group.name} group`);
+        groupButton.onclick = () => requestAccess('group', group.name, `the ${group.name} group`, groupButton);
       } else if (groupState === 'pending' || groupState === 'requested' || groupState === 'group-pending') {
         groupButton.onclick = () => withdrawAccessRequest(group.requestId, `the ${group.name} group`);
       } else {
@@ -5160,7 +5632,7 @@ def index() -> None:
               ? `Withdraw the request for ${calendar.name}`
               : `Request access to ${calendar.name}`;
         if (calendarState === 'available') {
-          calendarButton.onclick = () => requestAccess('calendar', calendar.id, calendar.name);
+          calendarButton.onclick = () => requestAccess('calendar', calendar.id, calendar.name, calendarButton);
         } else if (calendarState === 'pending' || calendarState === 'requested' || calendarState === 'group-pending') {
           calendarButton.onclick = () => withdrawAccessRequest(calendar.requestId, calendar.name);
         } else if (calendarState === 'granted' || calendarState === 'approved' || calendarState === 'hidden') {
@@ -5239,6 +5711,10 @@ def index() -> None:
     });
   }
 
+  async function deleteAdminUser(userId) {
+    return request(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
+  }
+
   async function createAdminGroup(name) {
     return request('/api/admin/groups', 'POST', { name });
   }
@@ -5257,6 +5733,18 @@ def index() -> None:
 
   async function updateAdminCalendarGroup(calendarId, groupName) {
     return request(`/api/admin/calendars/${encodeURIComponent(calendarId)}/group`, 'PUT', { groupName });
+  }
+
+  async function updateAdminCalendarOrder(calendarIds) {
+    return request('/api/admin/calendars/order', 'PUT', { calendarIds });
+  }
+
+  async function runAdminDatabaseTableVacuum(schemaName, tableName) {
+    return request('/api/admin/postgres-vacuum/table', 'POST', { schemaName, tableName });
+  }
+
+  async function runAdminDatabaseVacuum() {
+    return request('/api/admin/postgres-vacuum', 'POST', {});
   }
 
   async function removeAdminCalendarFromGroup(calendarId, groupName) {
@@ -5316,7 +5804,7 @@ def index() -> None:
     }
 
     adminUsersData = usersData || { users: [], resources: [], resourceGroups: {}, groups: [], accessRequests: [], error: usersError };
-    adminPerformanceData = performanceData || { summary: {}, activeQueries: [], topStatements: [], error: performanceError };
+    adminPerformanceData = performanceData || { summary: {}, activeQueries: [], topStatements: [], tableStats: [], error: performanceError };
 
     if (usersError || performanceError) {
       showSaveToast('Admin data warning', 'Some admin data could not be loaded. Check console logs.');
@@ -5379,32 +5867,118 @@ def index() -> None:
     const userResources = adminUsersData.resources || [];
     const adminGroups = adminUsersData.groups || [];
 
-    const calendarEditorsCard = document.createElement('section');
-    calendarEditorsCard.className = 'admin-link-card';
+    const calendarOrderCard = document.createElement('section');
+    calendarOrderCard.className = 'admin-link-card';
 
-    const calendarEditorsTitle = document.createElement('strong');
-    calendarEditorsTitle.textContent = 'Calendar Editors';
+    const calendarOrderTitle = document.createElement('strong');
+    calendarOrderTitle.textContent = 'Calendar Order';
 
-    const calendarEditorsNote = document.createElement('div');
-    calendarEditorsNote.className = 'admin-helper';
-    calendarEditorsNote.textContent = 'Open an editor page for each calendar to update its name, group, blurb, color, and image.';
+    const calendarOrderNote = document.createElement('div');
+    calendarOrderNote.className = 'admin-helper';
+    calendarOrderNote.textContent = 'Reorder calendars for the left sidebar navigation using the arrow controls, then save.';
 
-    const calendarEditorsGrid = document.createElement('div');
-    calendarEditorsGrid.className = 'admin-resource-catalog';
-    for (const resource of userResources) {
-      const linkButton = document.createElement('button');
-      linkButton.type = 'button';
-      linkButton.className = 'admin-resource-option';
-      linkButton.textContent = `${resource.group || 'General'} / ${resource.name}`;
-      linkButton.onclick = () => {
-        window.location.href = `/calendar-edit/${encodeURIComponent(resource.id)}`;
-      };
-      calendarEditorsGrid.appendChild(linkButton);
-    }
+    const calendarOrderList = document.createElement('div');
+    calendarOrderList.className = 'admin-order-list';
+    const calendarOrderItems = [...userResources].sort((left, right) => {
+      const leftOrder = Number(left?.sortOrder ?? 0);
+      const rightOrder = Number(right?.sortOrder ?? 0);
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return String(left?.name || '').localeCompare(String(right?.name || ''));
+    });
 
-    calendarEditorsCard.appendChild(calendarEditorsTitle);
-    calendarEditorsCard.appendChild(calendarEditorsNote);
-    calendarEditorsCard.appendChild(calendarEditorsGrid);
+    const renderCalendarOrderList = () => {
+      calendarOrderList.innerHTML = '';
+      for (let index = 0; index < calendarOrderItems.length; index += 1) {
+        const resource = calendarOrderItems[index];
+        const row = document.createElement('div');
+        row.className = 'admin-order-row';
+
+        const label = document.createElement('div');
+        label.className = 'admin-order-label';
+        label.style.color = resource.color || '#0f172a';
+
+        const swatch = document.createElement('span');
+        swatch.className = 'admin-order-swatch';
+        swatch.style.background = resource.color || '#64748b';
+        swatch.setAttribute('aria-hidden', 'true');
+
+        const labelText = document.createElement('span');
+        labelText.textContent = `${resource.group || 'General'} / ${resource.name}`;
+        label.append(swatch, labelText);
+
+        const controls = document.createElement('div');
+        controls.className = 'admin-order-controls';
+
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'btn btn-neutral';
+        editButton.textContent = 'Edit';
+        editButton.onclick = () => {
+          openCalendarEditorModal(resource.id, resource.name);
+        };
+
+        const upButton = document.createElement('button');
+        upButton.type = 'button';
+        upButton.className = 'btn btn-neutral';
+        upButton.textContent = 'Up';
+        upButton.disabled = index === 0;
+        upButton.onclick = () => {
+          if (index === 0) return;
+          const previous = calendarOrderItems[index - 1];
+          calendarOrderItems[index - 1] = resource;
+          calendarOrderItems[index] = previous;
+          renderCalendarOrderList();
+        };
+
+        const downButton = document.createElement('button');
+        downButton.type = 'button';
+        downButton.className = 'btn btn-neutral';
+        downButton.textContent = 'Down';
+        downButton.disabled = index === calendarOrderItems.length - 1;
+        downButton.onclick = () => {
+          if (index >= calendarOrderItems.length - 1) return;
+          const next = calendarOrderItems[index + 1];
+          calendarOrderItems[index + 1] = resource;
+          calendarOrderItems[index] = next;
+          renderCalendarOrderList();
+        };
+
+        controls.append(editButton, upButton, downButton);
+        row.append(label, controls);
+        calendarOrderList.appendChild(row);
+      }
+    };
+
+    renderCalendarOrderList();
+
+    const calendarOrderSaveButton = document.createElement('button');
+    calendarOrderSaveButton.type = 'button';
+    calendarOrderSaveButton.className = 'admin-save-button';
+    calendarOrderSaveButton.textContent = 'Save Calendar Order';
+    calendarOrderSaveButton.onclick = async () => {
+      const oldLabel = calendarOrderSaveButton.textContent;
+      calendarOrderSaveButton.disabled = true;
+      calendarOrderSaveButton.textContent = 'Saving...';
+      try {
+        const orderedIds = calendarOrderItems.map((resource) => resource.id);
+        await updateAdminCalendarOrder(orderedIds);
+
+        const refreshedCalendars = await request('/api/calendars');
+        allCalendars = Array.isArray(refreshedCalendars) ? refreshedCalendars : [];
+        tokenAllowedCalendars = new Set(allCalendars.map((calendar) => calendar.id));
+        renderSidebar();
+
+        showSaveToast('Calendar order updated', 'Sidebar calendar order has been saved.');
+        await loadAdminData();
+      } catch (error) {
+        showErrorToast('Calendar order save failed', error instanceof Error ? error.message : String(error));
+      } finally {
+        calendarOrderSaveButton.disabled = false;
+        calendarOrderSaveButton.textContent = oldLabel;
+      }
+    };
+
+    calendarOrderCard.append(calendarOrderTitle, calendarOrderNote, calendarOrderList, calendarOrderSaveButton);
 
     const groupCreateCard = document.createElement('section');
     groupCreateCard.className = 'admin-link-card';
@@ -5444,7 +6018,7 @@ def index() -> None:
     groupCreateRow.appendChild(groupCreateButton);
     groupCreateCard.appendChild(groupCreateTitle);
     groupCreateCard.appendChild(groupCreateRow);
-    adminGroupGrid.appendChild(calendarEditorsCard);
+    adminGroupGrid.appendChild(calendarOrderCard);
     adminGroupGrid.appendChild(groupCreateCard);
 
     for (const group of adminGroups) {
@@ -5902,7 +6476,36 @@ def index() -> None:
         }
       };
 
-      titleWrap.append(title, emailLine, meta, loginLinkWrap, regenerateLoginLinkButton);
+      const deleteUserButton = document.createElement('button');
+      deleteUserButton.type = 'button';
+      deleteUserButton.className = 'btn btn-danger';
+      deleteUserButton.textContent = 'Delete user';
+      deleteUserButton.disabled = Boolean(currentUser && currentUser.id === user.id);
+      deleteUserButton.title = deleteUserButton.disabled
+        ? 'You cannot delete your own account.'
+        : 'Delete this user account.';
+      deleteUserButton.onclick = async () => {
+        const targetLabel = user.name || user.email || 'this user';
+        const confirmed = window.confirm(`Delete ${targetLabel}? This cannot be undone.`);
+        if (!confirmed) {
+          return;
+        }
+        const oldLabel = deleteUserButton.textContent;
+        deleteUserButton.disabled = true;
+        deleteUserButton.textContent = 'Deleting...';
+        try {
+          await deleteAdminUser(user.id);
+          showSaveToast('User deleted', `${targetLabel} was removed.`);
+          await loadAdminData();
+        } catch (error) {
+          showErrorToast('Delete failed', error instanceof Error ? error.message : String(error));
+          deleteUserButton.disabled = Boolean(currentUser && currentUser.id === user.id);
+        } finally {
+          deleteUserButton.textContent = oldLabel;
+        }
+      };
+
+      titleWrap.append(title, emailLine, meta, loginLinkWrap, regenerateLoginLinkButton, deleteUserButton);
 
       const roleBadge = document.createElement('span');
       roleBadge.className = `admin-user-role ${user.role === 'admin' ? 'admin' : 'user'}`;
@@ -6256,6 +6859,7 @@ def index() -> None:
     const summary = perf.summary || {};
     const activeQueries = Array.isArray(perf.activeQueries) ? perf.activeQueries : [];
     const topStatements = Array.isArray(perf.topStatements) ? perf.topStatements : [];
+    const tableStats = Array.isArray(perf.tableStats) ? perf.tableStats : [];
 
     const summaryCard = document.createElement('section');
     summaryCard.className = 'admin-link-card';
@@ -6280,16 +6884,50 @@ def index() -> None:
         refreshPerfButton.textContent = oldLabel;
       }
     });
-    summaryActions.append(summarySpacer, refreshPerfButton);
+    const vacuumPerfButton = document.createElement('button');
+    vacuumPerfButton.type = 'button';
+    vacuumPerfButton.className = 'admin-save-button';
+    vacuumPerfButton.textContent = 'Run VACUUM';
+    vacuumPerfButton.addEventListener('click', async () => {
+      const oldLabel = vacuumPerfButton.textContent;
+      vacuumPerfButton.disabled = true;
+      refreshPerfButton.disabled = true;
+      vacuumPerfButton.textContent = 'Running...';
+      try {
+        await runAdminDatabaseVacuum();
+        showSaveToast('VACUUM completed', 'Database maintenance finished successfully.');
+        await loadAdminData();
+      } catch (error) {
+        showErrorToast('VACUUM failed', error instanceof Error ? error.message : String(error));
+      } finally {
+        vacuumPerfButton.disabled = false;
+        refreshPerfButton.disabled = false;
+        vacuumPerfButton.textContent = oldLabel;
+      }
+    });
+    summaryActions.append(summarySpacer, vacuumPerfButton, refreshPerfButton);
     const summaryMeta = document.createElement('div');
     summaryMeta.className = 'admin-helper';
     const capturedAt = String(perf.capturedAt || '').trim();
     summaryMeta.textContent = capturedAt ? `Captured at ${capturedAt}` : 'No timestamp available.';
 
+    const lastAutovacuum = String(summary.lastAutovacuum || '').trim();
+    const lastAutoanalyze = String(summary.lastAutoanalyze || '').trim();
+    const lastVacuum = String(summary.lastVacuum || '').trim();
+    const lastAnalyze = String(summary.lastAnalyze || '').trim();
+
     const summaryGrid = document.createElement('div');
     summaryGrid.className = 'admin-resource-pills';
     const summaryItems = [
       ['Connections', Number(summary.connections || 0)],
+      ['Autovacuum workers', Number(summary.autovacuumWorkers || 0)],
+      ['Tables', Number(summary.tableCount || 0)],
+      ['Live tuples', Number(summary.liveTuples || 0)],
+      ['Dead tuples', Number(summary.deadTuples || 0)],
+      ['Autovacuum runs', Number(summary.autovacuumCount || 0)],
+      ['Autoanalyze runs', Number(summary.autoanalyzeCount || 0)],
+      ['Vacuum runs', Number(summary.vacuumCount || 0)],
+      ['Analyze runs', Number(summary.analyzeCount || 0)],
       ['Active sessions', Number(summary.activeSessions || 0)],
       ['Blocked sessions', Number(summary.blockedSessions || 0)],
       ['Idle in transaction', Number(summary.idleInTransaction || 0)],
@@ -6309,7 +6947,100 @@ def index() -> None:
       summaryGrid.appendChild(pill);
     }
     summaryCard.append(summaryTitle, summaryActions, summaryMeta, summaryGrid);
+    if (lastAutovacuum || lastAutoanalyze || lastVacuum || lastAnalyze) {
+      const timings = document.createElement('div');
+      timings.className = 'admin-helper';
+      const entries = [];
+      if (lastAutovacuum) entries.push(`Last autovacuum: ${new Date(lastAutovacuum).toLocaleString()}`);
+      if (lastAutoanalyze) entries.push(`Last autoanalyze: ${new Date(lastAutoanalyze).toLocaleString()}`);
+      if (lastVacuum) entries.push(`Last vacuum: ${new Date(lastVacuum).toLocaleString()}`);
+      if (lastAnalyze) entries.push(`Last analyze: ${new Date(lastAnalyze).toLocaleString()}`);
+      timings.textContent = entries.join(' · ');
+      summaryCard.appendChild(timings);
+    }
     adminPostgresPerformanceGrid.appendChild(summaryCard);
+
+    const vacuumCard = document.createElement('section');
+    vacuumCard.className = 'admin-link-card';
+    const vacuumTitle = document.createElement('strong');
+    vacuumTitle.textContent = 'Table Vacuum Breakdown';
+    const vacuumNote = document.createElement('div');
+    vacuumNote.className = 'admin-helper';
+    vacuumNote.textContent = 'Tables are ordered by dead tuples. Use the button on a row to run VACUUM ANALYZE for that table only.';
+    const vacuumList = document.createElement('div');
+    vacuumList.className = 'admin-vacuum-list';
+
+    if (tableStats.length === 0) {
+      const emptyVacuum = document.createElement('div');
+      emptyVacuum.className = 'admin-helper';
+      emptyVacuum.textContent = 'No table statistics available.';
+      vacuumList.appendChild(emptyVacuum);
+    } else {
+      for (const tableStat of tableStats) {
+        const row = document.createElement('div');
+        row.className = 'admin-vacuum-row';
+
+        const label = document.createElement('div');
+        label.className = 'admin-vacuum-label';
+        const tableName = document.createElement('div');
+        tableName.className = 'admin-vacuum-table-name';
+        tableName.textContent = `${String(tableStat.schemaName || 'public')}.${String(tableStat.tableName || '')}`;
+        const tableMeta = document.createElement('div');
+        tableMeta.className = 'admin-vacuum-table-meta';
+        const lastAutovacuum = String(tableStat.lastAutovacuum || '').trim();
+        const lastAutoanalyze = String(tableStat.lastAutoanalyze || '').trim();
+        tableMeta.textContent = lastAutovacuum || lastAutoanalyze
+          ? [
+              lastAutovacuum ? `autovacuum ${new Date(lastAutovacuum).toLocaleString()}` : '',
+              lastAutoanalyze ? `autoanalyze ${new Date(lastAutoanalyze).toLocaleString()}` : '',
+            ].filter(Boolean).join(' · ')
+          : 'No auto maintenance timestamp recorded.';
+        label.append(tableName, tableMeta);
+
+        const liveTuples = document.createElement('div');
+        liveTuples.className = 'admin-vacuum-stat';
+        liveTuples.textContent = `Live: ${Number(tableStat.liveTuples || 0)}`;
+
+        const deadTuples = document.createElement('div');
+        deadTuples.className = 'admin-vacuum-stat';
+        deadTuples.textContent = `Dead: ${Number(tableStat.deadTuples || 0)}`;
+
+        const vacuumCounts = document.createElement('div');
+        vacuumCounts.className = 'admin-vacuum-stat';
+        vacuumCounts.textContent = `Vacuum: ${Number(tableStat.vacuumCount || 0)} / Autovacuum: ${Number(tableStat.autovacuumCount || 0)}`;
+
+        const tableButton = document.createElement('button');
+        tableButton.type = 'button';
+        tableButton.className = 'admin-save-button';
+        tableButton.textContent = 'Vacuum Table';
+        tableButton.disabled = !tableStat.tableName;
+        tableButton.addEventListener('click', async () => {
+          const oldLabel = tableButton.textContent;
+          tableButton.disabled = true;
+          refreshPerfButton.disabled = true;
+          vacuumPerfButton.disabled = true;
+          tableButton.textContent = 'Running...';
+          try {
+            await runAdminDatabaseTableVacuum(tableStat.schemaName, tableStat.tableName);
+            showSaveToast('Table vacuum completed', `${String(tableStat.schemaName || 'public')}.${String(tableStat.tableName || '')} was vacuumed successfully.`);
+            await loadAdminData();
+          } catch (error) {
+            showErrorToast('Table vacuum failed', error instanceof Error ? error.message : String(error));
+          } finally {
+            tableButton.disabled = false;
+            refreshPerfButton.disabled = false;
+            vacuumPerfButton.disabled = false;
+            tableButton.textContent = oldLabel;
+          }
+        });
+
+        row.append(label, liveTuples, deadTuples, vacuumCounts, tableButton);
+        vacuumList.appendChild(row);
+      }
+    }
+
+    vacuumCard.append(vacuumTitle, vacuumNote, vacuumList);
+    adminPostgresPerformanceGrid.appendChild(vacuumCard);
 
     const activeCard = document.createElement('section');
     activeCard.className = 'admin-link-card';
@@ -6375,31 +7106,144 @@ def index() -> None:
     } else {
       const topTable = document.createElement('table');
       topTable.className = 'admin-performance-table';
+
+      // Sortable columns: key = data field, label = header text
+      const TOP_COLS = [
+        { key: 'calls',       label: 'Calls',  numeric: true,  fmt: (v) => String(Number(v || 0)) },
+        { key: 'totalExecMs', label: 'Total',  numeric: true,  fmt: (v) => formatDuration(Number(v || 0)) },
+        { key: 'meanExecMs',  label: 'Mean',   numeric: true,  fmt: (v) => formatDuration(Number(v || 0)) },
+        { key: 'rows',        label: 'Rows',   numeric: true,  fmt: (v) => String(Number(v || 0)) },
+        { key: 'query',       label: 'Query',  numeric: false, fmt: (v) => String(v || '').trim() },
+      ];
+      const TOP_COL_SPAN = TOP_COLS.length + 1; // +1 for the Explain action column
+
+      let topSortKey = 'totalExecMs';
+      let topSortAsc = false;
+
       const topHeader = document.createElement('thead');
-      topHeader.innerHTML = '<tr><th>Calls</th><th>Total</th><th>Mean</th><th>Rows</th><th>Query</th></tr>';
+      const topHeaderRow = document.createElement('tr');
       const topBody = document.createElement('tbody');
-      for (const row of topStatements) {
-        const tr = document.createElement('tr');
 
-        const callsTd = document.createElement('td');
-        callsTd.textContent = String(Number(row.calls || 0));
+      const renderTopRows = () => {
+        const sorted = [...topStatements].sort((a, b) => {
+          const col = TOP_COLS.find((c) => c.key === topSortKey);
+          const av = col && col.numeric ? Number(a[topSortKey] || 0) : String(a[topSortKey] || '');
+          const bv = col && col.numeric ? Number(b[topSortKey] || 0) : String(b[topSortKey] || '');
+          let cmp = 0;
+          if (typeof av === 'number' && typeof bv === 'number') {
+            cmp = av - bv;
+          } else {
+            cmp = av < bv ? -1 : av > bv ? 1 : 0;
+          }
+          return topSortAsc ? cmp : -cmp;
+        });
 
-        const totalTd = document.createElement('td');
-        totalTd.textContent = formatDuration(Number(row.totalExecMs || 0));
+        topBody.innerHTML = '';
+        for (const row of sorted) {
+          const tr = document.createElement('tr');
+          for (const col of TOP_COLS) {
+            const td = document.createElement('td');
+            if (col.key === 'query') td.className = 'admin-performance-query';
+            td.textContent = col.fmt(row[col.key]);
+            tr.appendChild(td);
+          }
 
-        const meanTd = document.createElement('td');
-        meanTd.textContent = formatDuration(Number(row.meanExecMs || 0));
+          // Explain action cell
+          const explainTd = document.createElement('td');
+          const explainBtn = document.createElement('button');
+          explainBtn.type = 'button';
+          explainBtn.className = 'btn btn-neutral';
+          explainBtn.style.fontSize = '0.78rem';
+          explainBtn.style.padding = '3px 8px';
+          explainBtn.textContent = 'Explain';
 
-        const rowsTd = document.createElement('td');
-        rowsTd.textContent = String(Number(row.rows || 0));
+          // Expansion row (hidden until explain runs)
+          const expandTr = document.createElement('tr');
+          expandTr.hidden = true;
+          const expandTd = document.createElement('td');
+          expandTd.colSpan = TOP_COL_SPAN;
+          expandTd.style.padding = '0';
+          const pre = document.createElement('pre');
+          pre.style.cssText = 'margin:0;padding:10px 14px;background:#0f172a;color:#e2e8f0;font-size:0.78rem;overflow-x:auto;white-space:pre;border-top:1px solid #334155;';
+          expandTd.appendChild(pre);
+          expandTr.appendChild(expandTd);
 
-        const queryTd = document.createElement('td');
-        queryTd.className = 'admin-performance-query';
-        queryTd.textContent = String(row.query || '').trim();
+          explainBtn.addEventListener('click', async () => {
+            // Toggle off if already showing the same result
+            if (!expandTr.hidden && pre.dataset.loadedQuery === row.query) {
+              expandTr.hidden = true;
+              explainBtn.textContent = 'Explain';
+              return;
+            }
+            const oldLabel = explainBtn.textContent;
+            explainBtn.disabled = true;
+            explainBtn.textContent = 'Running...';
+            pre.textContent = '';
+            expandTr.hidden = false;
+            try {
+              const result = await request('/api/admin/postgres-explain', 'POST', { query: String(row.query || '').trim() });
+              if (result && result.ok) {
+                const strategyLabel = result.strategy === 'GENERIC_PLAN'
+                  ? '-- Strategy: GENERIC_PLAN (PostgreSQL 16+)\\n'
+                  : result.strategy === 'NULL_SUBSTITUTION'
+                    ? '-- Strategy: $N parameters replaced with NULL for planning\\n'
+                    : '';
+                pre.textContent = strategyLabel + String(result.plan || '(no plan returned)');
+                pre.dataset.loadedQuery = row.query;
+                explainBtn.textContent = 'Hide';
+              } else {
+                pre.textContent = `Error: ${String(result?.error || 'Unknown error')}`;
+                pre.dataset.loadedQuery = '';
+                explainBtn.textContent = 'Explain';
+              }
+            } catch (error) {
+              pre.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+              pre.dataset.loadedQuery = '';
+              explainBtn.textContent = 'Explain';
+            } finally {
+              explainBtn.disabled = false;
+            }
+          });
 
-        tr.append(callsTd, totalTd, meanTd, rowsTd, queryTd);
-        topBody.appendChild(tr);
-      }
+          explainTd.appendChild(explainBtn);
+          tr.appendChild(explainTd);
+          topBody.appendChild(tr);
+          topBody.appendChild(expandTr);
+        }
+      };
+
+      const renderTopHeader = () => {
+        topHeaderRow.innerHTML = '';
+        for (const col of TOP_COLS) {
+          const th = document.createElement('th');
+          th.style.cursor = col.key !== 'query' ? 'pointer' : '';
+          th.style.userSelect = 'none';
+          const isCurrent = topSortKey === col.key;
+          const arrow = isCurrent ? (topSortAsc ? ' ▲' : ' ▼') : '';
+          th.textContent = col.label + arrow;
+          if (col.key !== 'query') {
+            th.addEventListener('click', () => {
+              if (topSortKey === col.key) {
+                topSortAsc = !topSortAsc;
+              } else {
+                topSortKey = col.key;
+                topSortAsc = false;
+              }
+              renderTopHeader();
+              renderTopRows();
+            });
+          }
+          topHeaderRow.appendChild(th);
+        }
+        // Non-sortable header for the Explain column
+        const thExplain = document.createElement('th');
+        thExplain.textContent = '';
+        topHeaderRow.appendChild(thExplain);
+      };
+
+      renderTopHeader();
+      renderTopRows();
+      topHeader.appendChild(topHeaderRow);
       topTable.append(topHeader, topBody);
       topCard.appendChild(topTable);
     }
@@ -6442,11 +7286,20 @@ def index() -> None:
     const invalidToken = Boolean(options.invalidToken);
     const attemptedToken = options.attemptedToken || '';
     const validatingToken = Boolean(options.validatingToken);
+    const authModal = Boolean(options.authModal);
     appShell.style.display = 'none';
     if (profileOnboardingScreen) {
       profileOnboardingScreen.style.display = 'none';
     }
     landingScreen.style.display = 'flex';
+    setLandingAuthModal(authModal);
+    if (authModal) {
+      const landingUrl = new URL(window.location.href);
+      if (landingUrl.searchParams.has('add_to_account')) {
+        landingUrl.searchParams.delete('add_to_account');
+        history.replaceState({}, '', landingUrl.toString());
+      }
+    }
     startSlimeSimulation();
 
     if (attemptedToken) tokenInput.value = attemptedToken;
@@ -6500,6 +7353,7 @@ def index() -> None:
         showAppShell();
         renderSidebar();
         void loadAccessCatalog();
+        connectCalendarUpdatesSocket();
         try {
           ensureCalendarLoaded();
         } catch (e) {
@@ -6530,11 +7384,23 @@ def index() -> None:
       if (event.key === 'Enter') submitToken();
     };
 
+    if (landingAuthBackdrop) {
+      landingAuthBackdrop.onclick = closeLandingAuthModal;
+    }
+
+    if (landingAuthCloseButton) {
+      landingAuthCloseButton.onclick = closeLandingAuthModal;
+    }
+
     // ── Google OAuth Login ────────────────────────────────────────────────────
     const googleLoginBtn = document.getElementById('google-login-btn');
     const passkeyLoginBtn = document.getElementById('passkey-login-btn');
     const emailLoginInput = document.getElementById('email-login-input');
     const emailLoginBtn = document.getElementById('email-login-btn');
+    const googleSignupBtn = document.getElementById('google-signup-btn');
+    const passkeySignupBtn = document.getElementById('passkey-signup-btn');
+    const emailSignupInput = document.getElementById('email-signup-input');
+    const emailSignupBtn = document.getElementById('email-signup-btn');
 
     const loadAppForAuthenticatedSession = async (sessionToken, sessionUser, originalToken = null) => {
       currentToken = sessionToken;
@@ -6578,62 +7444,186 @@ def index() -> None:
       }
       await loadAppForAuthenticatedSession(authResult.apiToken, authResult.user || null, sharedLinkToken || currentToken);
     };
-    if (googleLoginBtn) {
-      googleLoginBtn.onclick = async () => {
-        console.log('[LOGIN] Login button clicked');
-        
-        try {
-          // First check if user has a valid persisted session
-          const sessionCheckOpts = {
-            method: 'GET',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-          };
-          const sessionResponse = await fetch('/api/auth/check-session', sessionCheckOpts);
-          if (sessionResponse.ok) {
-            const sessionData = await sessionResponse.json();
-            if (sessionData.authenticated && sessionData.apiToken) {
-              const urlToken = sharedLinkToken || currentToken; // Preserve the original shared link token if present
-              if (sessionData.user && sessionData.user.isTokenOnlyAccount) {
-                console.log('[LOGIN] Token-only session detected, redirecting to OAuth');
-                if (urlToken) {
-                  await preservePendingLinkForOauth(urlToken);
-                }
-                window.location.href = '/auth/google-login';
-                return;
-              }
 
-              // User has a valid session - use it to authenticate
-              console.log('[LOGIN] Valid session found, authenticating');
-              const sessionToken = sessionData.apiToken;
+    const performPasskeySignup = async () => {
+      // Prompt for email and name
+      const email = prompt('Enter your email for sign-up:');
+      if (!email) {
+        throw new Error('Email is required for sign-up.');
+      }
 
-              try {
-                await loadAppForAuthenticatedSession(sessionToken, sessionData.user, sharedLinkToken || currentToken);
-              } catch (error) {
-                console.error('[LOGIN] Failed to load calendars with persisted session:', error);
-                // Fall through to OAuth as fallback
-                if (urlToken) {
-                  console.log('[LOGIN] Preserving shared link before OAuth redirect');
-                  await preservePendingLinkForOauth(urlToken);
-                }
-                window.location.href = '/auth/google-login';
-                return;
+      const name = prompt('Enter your name (optional):') || email.split('@')[0];
+
+      // Create account via local signup
+      const signupResponse = await request('/auth/local-signup', 'POST', { email, name }, false);
+      if (!signupResponse?.apiToken) {
+        throw new Error('Failed to create account.');
+      }
+
+      const newApiToken = signupResponse.apiToken;
+      const previousToken = currentToken;
+      let activatedSession = false;
+
+      try {
+        // Temporarily set currentToken to the new account's token for passkey registration
+        currentToken = newApiToken;
+
+        // Get passkey registration options
+        const optionsResult = await request('/api/passkeys/register/options', 'POST', {}, true);
+        const publicKey = optionsResult?.publicKey;
+        if (!publicKey || !publicKey.challenge || !publicKey.user || !publicKey.user.id) {
+          throw new Error('Invalid passkey options from server.');
+        }
+
+        // Create credential
+        const credentialCreationOptions = {
+          ...publicKey,
+          challenge: base64UrlToBuffer(publicKey.challenge),
+          user: {
+            ...publicKey.user,
+            id: base64UrlToBuffer(publicKey.user.id),
+          },
+          excludeCredentials: Array.isArray(publicKey.excludeCredentials)
+            ? publicKey.excludeCredentials.map((descriptor) => ({
+                ...descriptor,
+                id: base64UrlToBuffer(descriptor.id),
+              }))
+            : [],
+        };
+
+        const credential = await navigator.credentials.create({ publicKey: credentialCreationOptions });
+        if (!credential) {
+          throw new Error('Passkey creation was cancelled.');
+        }
+
+        const credentialPayload = {
+          id: credential.id,
+          type: credential.type,
+          rawId: bufferToBase64Url(credential.rawId),
+          response: {
+            clientDataJSON: bufferToBase64Url(credential.response.clientDataJSON),
+            attestationObject: bufferToBase64Url(credential.response.attestationObject),
+            transports: typeof credential.response.getTransports === 'function' ? credential.response.getTransports() : [],
+          },
+        };
+
+        // Verify passkey registration
+        await request('/api/passkeys/register/verify', 'POST', {
+          credential: credentialPayload,
+          passkeyName: 'Signup Passkey',
+        }, true);
+
+        // Load app with new account. This may pause on profile onboarding.
+        await loadAppForAuthenticatedSession(newApiToken, signupResponse.user || null, sharedLinkToken || previousToken);
+        activatedSession = true;
+      } finally {
+        // If signup did not complete, restore the prior token; otherwise keep new session token.
+        if (!activatedSession) {
+          currentToken = previousToken;
+        }
+      }
+    };
+
+    const startGoogleAuth = async () => {
+      console.log('[LOGIN] Login button clicked');
+
+      try {
+        // First check if user has a valid persisted session
+        const sessionCheckOpts = {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        };
+        const sessionResponse = await fetch('/api/auth/check-session', sessionCheckOpts);
+        if (sessionResponse.ok) {
+          const sessionData = await sessionResponse.json();
+          if (sessionData.authenticated && sessionData.apiToken) {
+            const urlToken = sharedLinkToken || currentToken; // Preserve the original shared link token if present
+            if (sessionData.user && sessionData.user.isTokenOnlyAccount) {
+              console.log('[LOGIN] Token-only session detected, redirecting to OAuth');
+              if (urlToken) {
+                await preservePendingLinkForOauth(urlToken);
               }
-              
+              window.location.href = '/auth/google-login';
               return;
             }
+
+            // User has a valid session - use it to authenticate
+            console.log('[LOGIN] Valid session found, authenticating');
+            const sessionToken = sessionData.apiToken;
+
+            try {
+              await loadAppForAuthenticatedSession(sessionToken, sessionData.user, sharedLinkToken || currentToken);
+            } catch (error) {
+              console.error('[LOGIN] Failed to load calendars with persisted session:', error);
+              // Fall through to OAuth as fallback
+              if (urlToken) {
+                console.log('[LOGIN] Preserving shared link before OAuth redirect');
+                await preservePendingLinkForOauth(urlToken);
+              }
+              window.location.href = '/auth/google-login';
+              return;
+            }
+
+            return;
           }
-        } catch (error) {
-          console.warn('[LOGIN] Session check failed, proceeding with OAuth:', error);
         }
-        
-        // No valid session - proceed with OAuth flow
-        if (sharedLinkToken || currentToken) {
-          console.log('[LOGIN] Preserving shared link before OAuth redirect');
-          await preservePendingLinkForOauth(sharedLinkToken || currentToken);
+      } catch (error) {
+        console.warn('[LOGIN] Session check failed, proceeding with OAuth:', error);
+      }
+
+      // No valid session - proceed with OAuth flow
+      if (sharedLinkToken || currentToken) {
+        console.log('[LOGIN] Preserving shared link before OAuth redirect');
+        await preservePendingLinkForOauth(sharedLinkToken || currentToken);
+      }
+      window.location.href = '/auth/google-login';
+    };
+
+    const startPasskeyAuth = async () => {
+      try {
+        await performPasskeyLogin();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        showErrorToast('Passkey login failed', message);
+      }
+    };
+
+    const sendEmailAuthLink = async (inputEl, buttonEl, emptyMessage, fallbackMessage, failureMessage) => {
+      const email = String(inputEl?.value || '').trim();
+      if (!email) {
+        tokenHelp.textContent = emptyMessage;
+        return;
+      }
+
+      const oldLabel = buttonEl.textContent;
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Sending...';
+      try {
+        const response = await fetch('/auth/email-login/request', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(String(payload.detail || failureMessage));
         }
-        window.location.href = '/auth/google-login';
-      };
+        tokenHelp.textContent = String(payload.message || fallbackMessage);
+      } catch (error) {
+        tokenHelp.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        buttonEl.disabled = false;
+        buttonEl.textContent = oldLabel;
+      }
+    };
+
+    if (googleLoginBtn) {
+      googleLoginBtn.onclick = startGoogleAuth;
+    }
+    if (googleSignupBtn) {
+      googleSignupBtn.onclick = startGoogleAuth;
     }
 
     if (passkeyLoginBtn) {
@@ -6642,10 +7632,7 @@ def index() -> None:
         passkeyLoginBtn.disabled = true;
         passkeyLoginBtn.textContent = 'Logging in...';
         try {
-          await performPasskeyLogin();
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          showErrorToast('Passkey login failed', message);
+          await startPasskeyAuth();
         } finally {
           passkeyLoginBtn.disabled = false;
           passkeyLoginBtn.textContent = oldLabel;
@@ -6653,47 +7640,83 @@ def index() -> None:
       };
     }
 
+    if (passkeySignupBtn) {
+      passkeySignupBtn.onclick = async () => {
+        const oldLabel = passkeySignupBtn.textContent;
+        passkeySignupBtn.disabled = true;
+        passkeySignupBtn.textContent = 'Signing up...';
+        try {
+          await performPasskeySignup();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          showErrorToast('Passkey signup failed', message);
+        } finally {
+          passkeySignupBtn.disabled = false;
+          passkeySignupBtn.textContent = oldLabel;
+        }
+      };
+    }
+
     if (emailLoginBtn) {
       emailLoginBtn.onclick = async () => {
-        const email = String(emailLoginInput?.value || '').trim();
-        if (!email) {
-          tokenHelp.textContent = 'Enter your email to receive a login link.';
-          return;
-        }
+        await sendEmailAuthLink(
+          emailLoginInput,
+          emailLoginBtn,
+          'Enter your email to receive a login link.',
+          'If an account exists for that email, a login link has been sent.',
+          'Unable to send login email.',
+        );
+      };
+    }
 
-        const oldLabel = emailLoginBtn.textContent;
-        emailLoginBtn.disabled = true;
-        emailLoginBtn.textContent = 'Sending...';
-        try {
-          const response = await fetch('/auth/email-login/request', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email }),
-          });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(String(payload.detail || 'Unable to send login email.'));
-          }
-          tokenHelp.textContent = String(payload.message || 'If an account exists for that email, a login link has been sent.');
-        } catch (error) {
-          tokenHelp.textContent = error instanceof Error ? error.message : String(error);
-        } finally {
-          emailLoginBtn.disabled = false;
-          emailLoginBtn.textContent = oldLabel;
-        }
+    if (emailSignupBtn) {
+      emailSignupBtn.onclick = async () => {
+        await sendEmailAuthLink(
+          emailSignupInput,
+          emailSignupBtn,
+          'Enter your email to receive a sign-up link.',
+          'If an account can be created for that email, a sign-up link has been sent.',
+          'Unable to send sign-up email.',
+        );
       };
     }
   }
 
   function showAppShell() {
     landingScreen.style.display = 'none';
+    if (landingAuthBackdrop) {
+      landingAuthBackdrop.hidden = true;
+    }
+    landingScreen.classList.remove('is-signin-modal');
     if (profileOnboardingScreen) {
       profileOnboardingScreen.style.display = 'none';
     }
     appShell.style.display = 'flex';
     adminNavItem.style.display = isAdminUser() ? 'flex' : 'none';
     setCurrentView('calendar');
+  }
+
+  function setLandingAuthModal(open) {
+    if (!landingScreen) {
+      return;
+    }
+    landingScreen.classList.toggle('is-signin-modal', open);
+    if (landingAuthBackdrop) {
+      landingAuthBackdrop.hidden = !open;
+    }
+  }
+
+  function closeLandingAuthModal() {
+    setLandingAuthModal(false);
+  }
+
+  if (!window.__landingAuthEscapeBound) {
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && landingScreen.classList.contains('is-signin-modal')) {
+        closeLandingAuthModal();
+      }
+    });
+    window.__landingAuthEscapeBound = true;
   }
 
   function visibleCalendarColors(calendarIds) {
@@ -6812,10 +7835,11 @@ def index() -> None:
       };
     }
 
-    if (signupNavItem) {
-      signupNavItem.style.display = currentUser && isServiceAccountUser() ? 'flex' : 'none';
-      signupNavItem.onclick = () => {
-        window.location.href = '/signup';
+    if (upcomingNavItem) {
+      upcomingNavItem.style.display = (hasValidToken && !isServiceAccountUser()) ? 'flex' : 'none';
+      upcomingNavItem.onclick = async () => {
+        setCurrentView('upcoming');
+        await loadUpcomingBookings();
       };
     }
 
@@ -6939,6 +7963,10 @@ def index() -> None:
 
   async function loadEvents(info, success, failure) {
     try {
+      if (!hasValidToken || !currentToken) {
+        success([]);
+        return;
+      }
       const q = new URLSearchParams({
         start: info.start.toISOString(),
         end:   info.end.toISOString(),
@@ -7303,6 +8331,10 @@ def index() -> None:
         if (settingsProfileLabGroupInput) {
           settingsProfileLabGroupInput.value = saved.labGroup;
         }
+        upcomingBookingsData = null;
+        if (currentView === 'upcoming') {
+          void loadUpcomingBookings();
+        }
         showSaveToast('Profile updated', 'Your profile changes have been saved.', false, accessPanel || document.body);
       } catch (error) {
         if (settingsProfileError) {
@@ -7448,7 +8480,6 @@ def index() -> None:
   });
 
   // ── Boot: require a valid token before fetching protected scheduler data ──
-  connectCalendarUpdatesSocket();
 
   // Guard against multiple bootstrap initializations
   if (window.__bootstrapRunning) {
@@ -7480,13 +8511,13 @@ def index() -> None:
         } else {
           // No valid session - show landing screen
           console.log('[BOOTSTRAP] No valid session, showing landing screen');
-          showLandingScreen();
+          showLandingScreen({ authModal: new URL(window.location.href).searchParams.has('add_to_account') });
           if (window.__revealPage) window.__revealPage();
         }
       })
       .catch(err => {
         console.warn('[BOOTSTRAP] Session check failed:', err);
-        showLandingScreen();
+        showLandingScreen({ authModal: new URL(window.location.href).searchParams.has('add_to_account') });
         if (window.__revealPage) window.__revealPage();
       });
     return;
@@ -7572,6 +8603,7 @@ def index() -> None:
         showAppShell();
         renderSidebar();
         void loadAccessCatalog();
+        connectCalendarUpdatesSocket();
         ensureCalendarLoaded();
         if (window.__revealPage) window.__revealPage();
       };

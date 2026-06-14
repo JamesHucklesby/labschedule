@@ -534,6 +534,7 @@ def init_db() -> None:
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS contact TEXT NOT NULL DEFAULT ''",
             'ALTER TABLE events ADD COLUMN IF NOT EXISTS end_time TEXT',
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS \"group\" TEXT NOT NULL DEFAULT 'General'",
+            "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS blurb TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE calendars ADD COLUMN IF NOT EXISTS image_thumb_url TEXT NOT NULL DEFAULT ''",
@@ -602,6 +603,7 @@ def init_db() -> None:
         conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_calendar_links_user_status_calendar ON user_calendar_links(user_id, status, calendar_id)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS idx_user_calendar_links_status_user ON user_calendar_links(status, user_id)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS idx_calendar_group_links_group_calendar ON calendar_group_links(group_name, calendar_id)'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_calendars_sort_order ON calendars(sort_order, name, id)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS idx_users_role_lower ON users ((lower(role)))'))
         conn.execute(text('DROP INDEX IF EXISTS idx_users_login_token'))
         conn.execute(text('DROP INDEX IF EXISTS idx_user_passkeys_user_id'))
@@ -734,6 +736,29 @@ def init_db() -> None:
         session.execute(text("UPDATE events SET contact = '' WHERE contact IS NULL"))
         session.execute(text("UPDATE users SET contact = '' WHERE contact IS NULL"))
         session.execute(text("UPDATE users SET lab_group = NULL WHERE lab_group IS NOT NULL AND trim(lab_group) = ''"))
+        session.execute(text("UPDATE calendars SET sort_order = 0 WHERE sort_order IS NULL"))
+        session.execute(text("""
+            WITH current_max AS (
+                SELECT COALESCE(MAX(sort_order), 0) AS max_order
+                FROM calendars
+                WHERE sort_order > 0
+            ),
+            ranked AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           ORDER BY
+                               COALESCE(NULLIF(TRIM("group"), ''), 'General') ASC,
+                               name ASC,
+                               id ASC
+                       ) AS row_number
+                FROM calendars
+                WHERE sort_order = 0
+            )
+            UPDATE calendars AS c
+            SET sort_order = current_max.max_order + ranked.row_number
+            FROM ranked, current_max
+            WHERE c.id = ranked.id
+        """))
 
         events_needing_split = session.scalars(
             select(EventORM).where(

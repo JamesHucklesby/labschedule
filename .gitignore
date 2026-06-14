@@ -3,4 +3,10 @@ __pycache__/
 .venv-wsl/
 .vscode/
 backups/
+dev_backups/
+dev_postgresql/
+postgresql/
 .env
+.env.dev
+.env.prod
+labschedule.code-workspace

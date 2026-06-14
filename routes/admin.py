@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from auth import (
@@ -49,7 +49,7 @@ from database import (
     _upsert_user_calendar_link,
     _upsert_user_group_link,
 )
-from models import CalendarGroupLinkORM, CalendarORM, GroupORM, GroupUserLinkORM, UserCalendarLinkORM, UserORM
+from models import ENGINE, CalendarGroupLinkORM, CalendarORM, EventORM, GroupORM, GroupUserLinkORM, UserCalendarLinkORM, UserORM, UserPasskeyORM, UserSavedShareLinkORM
 from realtime import _publish_user_resources_updated
 from realtime import _publish_calendar_change
 from schemas import (
@@ -430,7 +430,7 @@ def _list_access_requests(session, statuses: set[str] | None = None) -> list[dic
 def _list_admin_groups(session) -> list[dict[str, Any]]:
     group_rows = session.scalars(select(GroupORM).order_by(GroupORM.name.asc())).all()
     calendars = session.scalars(
-        select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
+        select(CalendarORM).order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
     ).all()
     calendar_group_links = session.scalars(
         select(CalendarGroupLinkORM).order_by(CalendarGroupLinkORM.group_name.asc(), CalendarGroupLinkORM.calendar_id.asc())
@@ -454,7 +454,15 @@ def _list_admin_groups(session) -> list[dict[str, Any]]:
             'name': calendar.name,
             'group': group_name,
             'color': calendar.color,
+            'sortOrder': int(calendar.sort_order or 0),
         })
+
+    for group_calendars in calendars_by_group.values():
+        group_calendars.sort(key=lambda calendar: (
+            int(calendar.get('sortOrder') or 0),
+            str(calendar.get('name') or '').lower(),
+            str(calendar.get('id') or ''),
+        ))
 
     groups: list[dict[str, Any]] = []
     for group in group_rows:
@@ -480,7 +488,7 @@ def access_catalog_for_user(token: str | None = None) -> dict[str, Any]:
             select(GroupORM).order_by(GroupORM.name.asc())
         ).all()
         calendars = session.scalars(
-            select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
+            select(CalendarORM).order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all()
         calendar_group_links = session.scalars(
             select(CalendarGroupLinkORM).order_by(CalendarGroupLinkORM.group_name.asc(), CalendarGroupLinkORM.calendar_id.asc())
@@ -985,9 +993,9 @@ def list_links_for_admin(token: str | None = None) -> dict[str, Any]:
             .order_by(UserORM.name.asc(), UserORM.login_token.asc())
         ).all()
         calendars = session.scalars(
-            select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
+            select(CalendarORM).order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all()
-        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color} for c in calendars]
+        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color, 'sortOrder': int(c.sort_order or 0)} for c in calendars]
 
         resource_groups: dict[str, list[str]] = {}
         for resource in resources:
@@ -1116,9 +1124,9 @@ def list_users_for_admin(token: str | None = None) -> dict[str, Any]:
             )
         ).all()
         calendars = session.scalars(
-            select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
+            select(CalendarORM).order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all()
-        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color} for c in calendars]
+        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color, 'sortOrder': int(c.sort_order or 0)} for c in calendars]
 
         resource_groups: dict[str, list[str]] = {}
         for resource in resources:
@@ -1173,6 +1181,14 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
         except Exception:
             return 0
 
+    def _format_timestamp(value: Any) -> str:
+        if not value:
+            return ''
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+
     with _db_session() as session:
         db_stats_row = session.execute(
             text(
@@ -1196,6 +1212,61 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
                 '''
             )
         ).mappings().first()
+        vacuum_stats = session.execute(
+            text(
+                '''
+                SELECT
+                    COUNT(*) AS table_count,
+                    COALESCE(SUM(n_live_tup), 0) AS live_tuples,
+                    COALESCE(SUM(n_dead_tup), 0) AS dead_tuples,
+                    COALESCE(SUM(vacuum_count), 0) AS vacuum_count,
+                    COALESCE(SUM(autovacuum_count), 0) AS autovacuum_count,
+                    COALESCE(SUM(analyze_count), 0) AS analyze_count,
+                    COALESCE(SUM(autoanalyze_count), 0) AS autoanalyze_count,
+                    MAX(last_vacuum) AS last_vacuum,
+                    MAX(last_autovacuum) AS last_autovacuum,
+                    MAX(last_analyze) AS last_analyze,
+                    MAX(last_autoanalyze) AS last_autoanalyze
+                FROM pg_stat_user_tables
+                '''
+            )
+        ).mappings().first() or {}
+
+        table_stats_rows = session.execute(
+            text(
+                '''
+                SELECT
+                    schemaname,
+                    relname,
+                    n_live_tup,
+                    n_dead_tup,
+                    vacuum_count,
+                    autovacuum_count,
+                    analyze_count,
+                    autoanalyze_count,
+                    last_vacuum,
+                    last_autovacuum,
+                    last_analyze,
+                    last_autoanalyze
+                FROM pg_stat_user_tables
+                ORDER BY n_dead_tup DESC, n_live_tup DESC, schemaname ASC, relname ASC
+                LIMIT 25
+                '''
+            )
+        ).mappings().all()
+
+        active_autovacuum_workers = _to_int(
+            session.scalar(
+                text(
+                    '''
+                    SELECT COUNT(*)
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND backend_type = 'autovacuum worker'
+                    '''
+                )
+            )
+        )
 
         activity_rows = session.execute(
             text(
@@ -1227,7 +1298,7 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
                 text(
                     '''
                     SELECT
-                        LEFT(REGEXP_REPLACE(COALESCE(query, ''), '\\s+', ' ', 'g'), 320) AS query_snippet,
+                        REGEXP_REPLACE(COALESCE(query, ''), '\\s+', ' ', 'g') AS query_text,
                         calls,
                         total_exec_time,
                         mean_exec_time,
@@ -1240,7 +1311,7 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
             ).mappings().all()
             for row in statement_rows:
                 top_statements.append({
-                    'query': str(row.get('query_snippet') or '').strip(),
+                    'query': str(row.get('query_text') or '').strip(),
                     'calls': _to_int(row.get('calls')),
                     'totalExecMs': float(row.get('total_exec_time') or 0.0),
                     'meanExecMs': float(row.get('mean_exec_time') or 0.0),
@@ -1292,10 +1363,39 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
     if (blks_read + blks_hit) > 0:
         cache_hit_ratio = (blks_hit / (blks_read + blks_hit)) * 100.0
 
+    table_stats = []
+    for row in table_stats_rows:
+        table_stats.append({
+            'schemaName': str(row.get('schemaname') or '').strip(),
+            'tableName': str(row.get('relname') or '').strip(),
+            'liveTuples': _to_int(row.get('n_live_tup')),
+            'deadTuples': _to_int(row.get('n_dead_tup')),
+            'vacuumCount': _to_int(row.get('vacuum_count')),
+            'autovacuumCount': _to_int(row.get('autovacuum_count')),
+            'analyzeCount': _to_int(row.get('analyze_count')),
+            'autoanalyzeCount': _to_int(row.get('autoanalyze_count')),
+            'lastVacuum': _format_timestamp(row.get('last_vacuum')),
+            'lastAutovacuum': _format_timestamp(row.get('last_autovacuum')),
+            'lastAnalyze': _format_timestamp(row.get('last_analyze')),
+            'lastAutoanalyze': _format_timestamp(row.get('last_autoanalyze')),
+        })
+
     return {
         'capturedAt': datetime.now().astimezone().isoformat(),
         'summary': {
             'connections': _to_int((db_stats_row or {}).get('numbackends')),
+            'autovacuumWorkers': active_autovacuum_workers,
+            'tableCount': _to_int(vacuum_stats.get('table_count')),
+            'liveTuples': _to_int(vacuum_stats.get('live_tuples')),
+            'deadTuples': _to_int(vacuum_stats.get('dead_tuples')),
+            'vacuumCount': _to_int(vacuum_stats.get('vacuum_count')),
+            'autovacuumCount': _to_int(vacuum_stats.get('autovacuum_count')),
+            'analyzeCount': _to_int(vacuum_stats.get('analyze_count')),
+            'autoanalyzeCount': _to_int(vacuum_stats.get('autoanalyze_count')),
+            'lastVacuum': vacuum_stats.get('last_vacuum').isoformat() if vacuum_stats.get('last_vacuum') else '',
+            'lastAutovacuum': vacuum_stats.get('last_autovacuum').isoformat() if vacuum_stats.get('last_autovacuum') else '',
+            'lastAnalyze': vacuum_stats.get('last_analyze').isoformat() if vacuum_stats.get('last_analyze') else '',
+            'lastAutoanalyze': vacuum_stats.get('last_autoanalyze').isoformat() if vacuum_stats.get('last_autoanalyze') else '',
             'activeSessions': active_sessions,
             'blockedSessions': blocked_sessions,
             'idleInTransaction': idle_in_transaction_sessions,
@@ -1310,10 +1410,117 @@ def list_postgres_performance_for_admin(token: str | None = None) -> dict[str, A
             'tupUpdated': _to_int((db_stats_row or {}).get('tup_updated')),
             'tupDeleted': _to_int((db_stats_row or {}).get('tup_deleted')),
         },
+        'tableStats': table_stats,
         'activeQueries': active_queries,
         'topStatements': top_statements,
         'topStatementsError': top_statements_error,
     }
+
+
+@router.post('/api/admin/postgres-explain')
+def run_postgres_explain_for_admin(payload: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    query_text = str(payload.get('query') or '').strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail='query is required.')
+    if len(query_text) > 8192:
+        raise HTTPException(status_code=400, detail='Query too long (max 8192 characters).')
+    normalized_start = query_text.upper().lstrip()
+    allowed_prefixes = ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH', 'TABLE', 'VALUES')
+    if not any(normalized_start.startswith(kw) for kw in allowed_prefixes):
+        raise HTTPException(status_code=400, detail='Only SELECT/DML statements can be explained.')
+    try:
+        plan, strategy = _explain_plan(query_text)
+    except ValueError as exc:
+        return {'ok': False, 'error': str(exc)}
+    return {'ok': True, 'plan': plan, 'strategy': strategy}
+
+
+
+
+def _explain_plan(query_text: str) -> tuple[str, str]:
+    """Return (plan_text, strategy_label).
+
+    Strategy order:
+    1. EXPLAIN (GENERIC_PLAN) — PG 16+; works with $N parameters natively.
+    2. EXPLAIN plain on the query after replacing every $N placeholder with NULL::text
+       so the planner sees a syntactically valid literal.
+    3. Hard error with the last exception message.
+    """
+    import re as _re
+
+    def _run(session: Any, sql: str) -> list[str]:
+        session.execute(text('SAVEPOINT _explain_sp'))
+        try:
+            rows = session.execute(text(sql)).fetchall()
+            session.execute(text('RELEASE SAVEPOINT _explain_sp'))
+            return [str(r[0]) for r in rows]
+        except SQLAlchemyError:
+            session.execute(text('ROLLBACK TO SAVEPOINT _explain_sp'))
+            raise
+
+    def _null_substitute(q: str) -> str:
+        """Replace every $N parameter reference with NULL::text."""
+        return _re.sub(r'\$\d+', 'NULL::text', q)
+
+    with _db_session() as session:
+        # Strategy 1 – GENERIC_PLAN (PostgreSQL 16+)
+        try:
+            lines = _run(session, f'EXPLAIN (FORMAT TEXT, GENERIC_PLAN) {query_text}')
+            return '\n'.join(lines), 'GENERIC_PLAN'
+        except SQLAlchemyError:
+            pass
+
+        # Strategy 2 – substitute $N → NULL::text and use plain EXPLAIN
+        null_query = _null_substitute(query_text)
+        try:
+            lines = _run(session, f'EXPLAIN (FORMAT TEXT) {null_query}')
+            note = '-- Note: $N parameters replaced with NULL::text for planning\n'
+            return note + '\n'.join(lines), 'NULL_SUBSTITUTION'
+        except SQLAlchemyError as exc2:
+            orig = getattr(exc2, 'orig', None)
+            raise ValueError(str(orig) if orig else str(exc2)) from exc2
+
+
+@router.post('/api/admin/postgres-vacuum')
+def run_postgres_vacuum_for_admin(token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    with DB_LOCK:
+        with ENGINE.connect().execution_options(isolation_level='AUTOCOMMIT') as connection:
+            connection.execute(text('VACUUM (ANALYZE)'))
+    return {'ok': True, 'message': 'VACUUM (ANALYZE) completed.'}
+
+
+@router.post('/api/admin/postgres-vacuum/table')
+def run_postgres_table_vacuum_for_admin(payload: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    schema_name = _sanitize_text_input(str(payload.get('schemaName') or ''), 'schemaName', min_length=1, max_length=128)
+    table_name = _sanitize_text_input(str(payload.get('tableName') or ''), 'tableName', min_length=1, max_length=128)
+
+    with DB_LOCK:
+        with _db_session() as session:
+            table_exists = session.scalar(
+                text(
+                    '''
+                    SELECT 1
+                    FROM pg_stat_user_tables
+                    WHERE schemaname = :schema_name
+                      AND relname = :table_name
+                    LIMIT 1
+                    '''
+                ),
+                {'schema_name': schema_name, 'table_name': table_name},
+            )
+            if table_exists is None:
+                raise HTTPException(status_code=404, detail='Table not found in database statistics.')
+
+        escaped_schema_name = schema_name.replace('"', '""')
+        escaped_table_name = table_name.replace('"', '""')
+        qualified_name = f'"{escaped_schema_name}"."{escaped_table_name}"'
+        with ENGINE.connect().execution_options(isolation_level='AUTOCOMMIT') as connection:
+            connection.execute(text(f'VACUUM (ANALYZE) {qualified_name}'))
+
+    return {'ok': True, 'message': f'VACUUM (ANALYZE) completed for {schema_name}.{table_name}.'}
 
 
 @router.get('/api/admin/groups')
@@ -1322,9 +1529,9 @@ def list_groups_for_admin(token: str | None = None) -> dict[str, Any]:
     with _db_session() as session:
         groups = _list_admin_groups(session)
         calendars = session.scalars(
-            select(CalendarORM).order_by(CalendarORM.group_name.asc(), CalendarORM.name.asc())
+            select(CalendarORM).order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all()
-        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color} for c in calendars]
+        resources = [{'id': c.id, 'name': c.name, 'group': c.group_name, 'color': c.color, 'sortOrder': int(c.sort_order or 0)} for c in calendars]
 
     resource_groups: dict[str, list[str]] = {}
     for resource in resources:
@@ -1431,6 +1638,40 @@ def suggest_calendar_color_for_group(
         chosen_score, chosen_candidate = scored[top_count]
 
     return {'ok': True, 'color': _rgb_to_hex(chosen_candidate), 'score': chosen_score}
+
+
+@router.put('/api/admin/calendars/order')
+def update_calendar_order_for_admin(payload: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    raw_calendar_ids = payload.get('calendarIds')
+    if not isinstance(raw_calendar_ids, list):
+        raise HTTPException(status_code=400, detail='calendarIds must be an array of calendar IDs.')
+
+    provided_calendar_ids = _sanitize_calendar_ids_input(raw_calendar_ids)
+    if not provided_calendar_ids:
+        raise HTTPException(status_code=400, detail='calendarIds cannot be empty.')
+
+    with DB_LOCK:
+        with _db_session() as session:
+            calendars = session.scalars(
+                select(CalendarORM)
+                .order_by(CalendarORM.sort_order.asc(), CalendarORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
+            ).all()
+            calendar_by_id = {calendar.id: calendar for calendar in calendars}
+            all_calendar_ids = [calendar.id for calendar in calendars]
+
+            invalid_ids = [calendar_id for calendar_id in provided_calendar_ids if calendar_id not in calendar_by_id]
+            if invalid_ids:
+                raise HTTPException(status_code=400, detail=f'Unknown calendars: {", ".join(invalid_ids)}')
+
+            ordered_calendar_ids = [calendar_id for calendar_id in provided_calendar_ids]
+            ordered_calendar_ids.extend([calendar_id for calendar_id in all_calendar_ids if calendar_id not in ordered_calendar_ids])
+
+            for index, calendar_id in enumerate(ordered_calendar_ids, start=1):
+                calendar_by_id[calendar_id].sort_order = index
+
+    _publish_calendar_change('calendar_changed', entity_id='calendar-order', calendar_ids=ordered_calendar_ids)
+    return {'ok': True, 'calendarIds': ordered_calendar_ids}
 
 
 @router.put('/api/admin/groups/{group_name}')
@@ -1788,7 +2029,13 @@ def create_group_resource_for_admin(
                 affected_groups.add(str(existing_resource.group_name or 'General'))
             else:
                 calendar_id = str(uuid4())
-                session.add(CalendarORM(id=calendar_id, name=resource_name, group_name=group_name))
+                next_sort_order = session.scalar(select(func.coalesce(func.max(CalendarORM.sort_order), 0))) or 0
+                session.add(CalendarORM(
+                    id=calendar_id,
+                    name=resource_name,
+                    group_name=group_name,
+                    sort_order=int(next_sort_order) + 1,
+                ))
                 _replace_calendar_group_links(session, calendar_id, [group_name])
                 created = True
                 affected_groups = {group_name}
@@ -1884,6 +2131,52 @@ def create_user_for_admin(payload: AdminUserCreateRequest, token: str | None = N
         'token': login_token,
         'loginUrl': f'{APP_BASE_URL}/?token={login_token}',
     }
+
+
+@router.delete('/api/admin/users/{user_id}')
+def delete_user_for_admin(user_id: str, token: str | None = None) -> dict[str, Any]:
+    _require_admin_user(token)
+    actor = _session_user_for_login_or_api_token(token)
+    user_id = _sanitize_id_input(user_id, 'user_id')
+
+    if actor and actor.get('id') == user_id:
+        raise HTTPException(status_code=400, detail='You cannot delete your own user account.')
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+
+            if str(user.role or DEFAULT_USER_ROLE) == 'admin':
+                admin_count = session.scalar(
+                    select(func.count())
+                    .select_from(UserORM)
+                    .where(UserORM.role == 'admin')
+                ) or 0
+                if int(admin_count) <= 1:
+                    raise HTTPException(status_code=400, detail='Cannot delete the last admin user.')
+
+            session.query(UserCalendarLinkORM).filter(UserCalendarLinkORM.user_id == user_id).delete(synchronize_session=False)
+            session.query(GroupUserLinkORM).filter(GroupUserLinkORM.user_id == user_id).delete(synchronize_session=False)
+            session.query(UserPasskeyORM).filter(UserPasskeyORM.user_id == user_id).delete(synchronize_session=False)
+            session.query(UserSavedShareLinkORM).filter(
+                or_(
+                    UserSavedShareLinkORM.user_id == user_id,
+                    UserSavedShareLinkORM.source_user_id == user_id,
+                )
+            ).delete(synchronize_session=False)
+
+            session.execute(
+                update(EventORM)
+                .where(EventORM.modified_by_user_id == user_id)
+                .values(modified_by_user_id=None)
+            )
+
+            session.delete(user)
+
+    _publish_user_resources_updated(user_id)
+    return {'ok': True, 'userId': user_id}
 
 
 @router.put('/api/admin/users/{user_id}/service-account')

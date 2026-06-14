@@ -20,12 +20,13 @@ from auth import (
     _session_user_for_login_or_api_token,
 )
 from config import APP_BASE_URL, DEFAULT_USER_ROLE, SESSION_COOKIE_SECURE
-from database import DB_LOCK, _db_session, _get_user_calendar_ids
+from database import DB_LOCK, _build_latest_events_stmt, _db_session, _get_user_calendar_ids
 from models import CalendarGroupLinkORM, CalendarORM, GroupUserLinkORM, LabGroupORM, UserORM, UserPasskeyORM
 from realtime import _publish_user_resources_updated
 from schemas import TokenValidationResult
 from utils import _sanitize_token_input
 from utils import _sanitize_text_input
+from utils import _compose_display_title, _orm_calendar_ids, _orm_contact, _orm_event_title, _orm_user_name, _parse_iso_datetime, expand_event_for_window
 from media_assets import calendar_placeholder_data_url
 from webauthn import generate_registration_options, options_to_json, verify_registration_response
 from webauthn import generate_authentication_options, verify_authentication_response
@@ -114,7 +115,7 @@ def list_calendars(token: str | None = None) -> list[dict[str, Any]]:
         calendars = session.scalars(
             select(CalendarORM)
             .where(CalendarORM.id.in_(sorted(allowed)))
-            .order_by(CalendarORM.name.asc(), CalendarORM.id.asc())
+            .order_by(CalendarORM.sort_order.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all()
 
         approved_group_names = set(session.scalars(
@@ -149,6 +150,7 @@ def list_calendars(token: str | None = None) -> list[dict[str, Any]]:
         deduped[calendar.id] = {
             'id': calendar.id,
             'name': calendar.name,
+            'sortOrder': int(calendar.sort_order or 0),
             'group': display_group,
             'groups': approved_groups,
             'color': calendar.color,
@@ -158,10 +160,7 @@ def list_calendars(token: str | None = None) -> list[dict[str, Any]]:
             'imageFallbackUrl': calendar_placeholder_data_url(calendar.name, display_group, calendar.color),
         }
 
-    return sorted(
-        deduped.values(),
-        key=lambda cal: (str(cal.get('group') or 'General').lower(), str(cal.get('name') or '').lower(), str(cal.get('id') or '')),
-    )
+    return list(deduped.values())
 
 
 @router.get('/api/links')
@@ -246,11 +245,25 @@ def update_my_profile(payload: dict[str, Any], token: str | None = None) -> dict
             user = session.get(UserORM, session_user['id'])
             if user is None:
                 raise HTTPException(status_code=404, detail='User not found.')
+            old_name = str(user.name or '').strip()
             session.merge(LabGroupORM(name=lab_group))
             session.flush()
             user.name = name
             user.contact = contact
             user.lab_group = lab_group
+
+            if old_name and old_name.casefold() != name.casefold():
+                base_stmt, event_alias, _ = _build_latest_events_stmt()
+                latest_events = session.scalars(
+                    base_stmt.where(event_alias.deleted == 0)
+                ).all()
+                for event in latest_events:
+                    event_user_name = str(_orm_user_name(event) or '').strip()
+                    if not event_user_name or event_user_name.casefold() != old_name.casefold():
+                        continue
+                    event_title = _orm_event_title(event)
+                    event.user_name = name
+                    event.title = _compose_display_title(name, event_title) or event.title
 
             lab_group_values = session.scalars(
                 select(LabGroupORM.name)
@@ -272,6 +285,101 @@ def update_my_profile(payload: dict[str, Any], token: str | None = None) -> dict
         },
         'labGroups': lab_groups,
         'needsProfile': False,
+    }
+
+
+@router.get('/api/users/me/upcoming-bookings')
+def list_my_upcoming_bookings(token: str | None = None, horizon_days: int = 90) -> dict[str, Any]:
+    session_user = _session_user_for_login_or_api_token(token)
+    if session_user is None:
+        raise HTTPException(status_code=401, detail='Login required.')
+
+    safe_horizon_days = max(1, min(int(horizon_days), 365))
+    now = datetime.now().astimezone()
+    window_end = now + timedelta(days=safe_horizon_days)
+
+    with DB_LOCK:
+        with _db_session() as session:
+            user = session.get(UserORM, session_user['id'])
+            if user is None:
+                raise HTTPException(status_code=404, detail='User not found.')
+            if bool(user.service_account):
+                return {'bookings': [], 'userName': str(user.name or '').strip(), 'horizonDays': safe_horizon_days}
+
+            user_name = str(user.name or '').strip()
+            if not user_name:
+                return {'bookings': [], 'userName': '', 'horizonDays': safe_horizon_days}
+
+            allowed_calendar_ids = set(_get_user_allowed_calendars(session, user.id) or set())
+            if not allowed_calendar_ids:
+                return {'bookings': [], 'userName': user_name, 'horizonDays': safe_horizon_days}
+
+            allowed_calendars = session.scalars(
+                select(CalendarORM)
+                .where(CalendarORM.id.in_(sorted(allowed_calendar_ids)))
+                .order_by(CalendarORM.sort_order.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
+            ).all()
+            calendar_name_by_id = {calendar.id: str(calendar.name or '').strip() for calendar in allowed_calendars}
+
+            base_stmt, event_alias, _ = _build_latest_events_stmt()
+            latest_events = session.scalars(
+                base_stmt.where(event_alias.deleted == 0)
+                .order_by(event_alias.start.asc())
+            ).all()
+
+            normalized_target_name = user_name.casefold()
+            bookings: list[dict[str, Any]] = []
+            for event in latest_events:
+                booking_user_name = str(_orm_user_name(event) or '').strip()
+                if not booking_user_name or booking_user_name.casefold() != normalized_target_name:
+                    continue
+
+                event_calendar_ids = [
+                    calendar_id
+                    for calendar_id in _orm_calendar_ids(event)
+                    if calendar_id in allowed_calendar_ids
+                ]
+                if not event_calendar_ids:
+                    continue
+
+                instances = expand_event_for_window(event, now, window_end)
+                for instance in instances:
+                    instance_start = _parse_iso_datetime(instance['start'])
+                    instance_end = _parse_iso_datetime(instance['end']) if instance.get('end') else instance_start
+                    if instance_end < now:
+                        continue
+
+                    instance_calendar_ids = [
+                        calendar_id
+                        for calendar_id in (instance.get('calendarIds') or [])
+                        if calendar_id in allowed_calendar_ids
+                    ]
+                    if not instance_calendar_ids:
+                        continue
+
+                    calendar_names = [
+                        calendar_name_by_id.get(calendar_id, calendar_id)
+                        for calendar_id in instance_calendar_ids
+                    ]
+                    bookings.append({
+                        'id': instance.get('id'),
+                        'title': str(instance.get('title') or ''),
+                        'name': booking_user_name,
+                        'eventTitle': str(_orm_event_title(event) or ''),
+                        'contact': str(_orm_contact(event) or ''),
+                        'start': instance.get('start'),
+                        'end': instance.get('end'),
+                        'allDay': bool(instance.get('allDay')),
+                        'committed': bool(instance.get('committed')),
+                        'calendarIds': instance_calendar_ids,
+                        'calendarNames': calendar_names,
+                    })
+
+    bookings.sort(key=lambda booking: str(booking.get('start') or ''))
+    return {
+        'bookings': bookings,
+        'userName': user_name,
+        'horizonDays': safe_horizon_days,
     }
 
 
@@ -345,7 +453,7 @@ def list_share_links(token: str | None = None) -> dict[str, Any]:
             select(CalendarGroupLinkORM.group_name, CalendarORM.id, CalendarORM.name)
             .join(CalendarORM, CalendarORM.id == CalendarGroupLinkORM.calendar_id)
             .where(CalendarGroupLinkORM.group_name.in_(sorted(all_group_names)))
-            .order_by(CalendarGroupLinkORM.group_name.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
+            .order_by(CalendarGroupLinkORM.group_name.asc(), CalendarORM.sort_order.asc(), CalendarORM.name.asc(), CalendarORM.id.asc())
         ).all() if all_group_names else []
 
     calendars_by_group_name: dict[str, list[dict[str, str]]] = {}
@@ -630,6 +738,11 @@ def passkey_authentication_verify(payload: dict[str, Any], request: Request) -> 
 
 @router.post('/api/passkeys/register/options')
 def passkey_registration_options(request: Request, token: str | None = None) -> dict[str, Any]:
+    """
+    Generate passkey registration options.
+    Supports both platform authenticators (biometric/PIN on device) and cross-platform authenticators (security keys).
+    Uses resident_key=PREFERRED to enable passkey-style credentials saved to the device.
+    """
     session_user = _session_user_for_login_or_api_token(token)
     if session_user is None:
         raise HTTPException(status_code=401, detail='Login required.')
@@ -653,6 +766,10 @@ def passkey_registration_options(request: Request, token: str | None = None) -> 
     ]
 
     rp_id = _rp_id_for_request(request)
+    # Platform authenticators: Windows Hello, Touch ID, Face ID, Android biometric
+    # Cross-platform authenticators: USB security keys, NFC keys
+    # resident_key=PREFERRED enables discoverable credentials (passkeys stored on device)
+    # user_verification=PREFERRED enables biometric/PIN protection
     options = generate_registration_options(
         rp_id=rp_id,
         rp_name='Lab Scheduler',

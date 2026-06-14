@@ -86,6 +86,7 @@ class CalendarORM(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('0'))
     group_name: Mapped[str] = mapped_column('group', ForeignKey('groups.name'), nullable=False, server_default=text("'General'"))
     color: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'#2563eb'"))
     blurb: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))

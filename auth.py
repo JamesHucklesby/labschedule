@@ -149,16 +149,80 @@ def _resolve_user_id_from_api_token(token: str | None) -> str | None:
     return None
 
 
+def _within_one_edit(left: str, right: str) -> bool:
+    if left == right:
+        return True
+
+    left_len = len(left)
+    right_len = len(right)
+    if abs(left_len - right_len) > 1:
+        return False
+
+    if left_len == right_len:
+        mismatches = 0
+        for left_ch, right_ch in zip(left, right):
+            if left_ch != right_ch:
+                mismatches += 1
+                if mismatches > 1:
+                    return False
+        return mismatches == 1
+
+    if left_len > right_len:
+        longer, shorter = left, right
+    else:
+        longer, shorter = right, left
+
+    long_idx = 0
+    short_idx = 0
+    skipped = False
+    while long_idx < len(longer) and short_idx < len(shorter):
+        if longer[long_idx] == shorter[short_idx]:
+            long_idx += 1
+            short_idx += 1
+            continue
+        if skipped:
+            return False
+        skipped = True
+        long_idx += 1
+
+    return True
+
+
 def _resolve_user_id_from_login_token(session: Session, token: str | None) -> str | None:
     if not token:
         return None
     normalized = ''.join(ch for ch in str(token) if ch.isalnum()).lower()
+    if not normalized:
+        return None
+
+    normalized_login_token = func.lower(func.regexp_replace(UserORM.login_token, r'[^A-Za-z0-9]', '', 'g'))
+
     user_id = session.scalar(
-        select(UserORM.id).where(
-            func.lower(func.regexp_replace(UserORM.login_token, r'[^A-Za-z0-9]', '', 'g')) == normalized
-        )
+        select(UserORM.id)
+        .where(normalized_login_token == normalized)
+        .limit(1)
     )
-    return str(user_id) if user_id else None
+    if user_id:
+        return str(user_id)
+
+    candidates = session.execute(
+        select(UserORM.id, normalized_login_token.label('normalized_token'))
+        .where(UserORM.login_token.isnot(None))
+        .where(func.abs(func.length(normalized_login_token) - len(normalized)) <= 1)
+    ).all()
+
+    matched_user_ids: list[str] = []
+    for candidate_user_id, candidate_token in candidates:
+        candidate_normalized = str(candidate_token or '').strip()
+        if not candidate_normalized:
+            continue
+        if _within_one_edit(candidate_normalized, normalized):
+            matched_user_ids.append(str(candidate_user_id))
+            if len(matched_user_ids) > 1:
+                # Avoid mapping to the wrong user when multiple near-matches exist.
+                return None
+
+    return matched_user_ids[0] if matched_user_ids else None
 
 
 def _resolve_user_id_from_login_or_api_token(session: Session, token: str | None) -> str | None:
